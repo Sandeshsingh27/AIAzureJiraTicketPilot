@@ -1,0 +1,25 @@
+{
+  "name": "ticket-orchestrator-mcp",
+  "version": "1.0.0",
+  "description": "Jira MCP Server for Ticket Orchestration",
+  "main": "jira-mcp-server.js",
+  "scripts": {
+    "start:mcp": "node jira-mcp-server.js",
+    "test:mcp": "echo \"Testing MCP server\""
+  },
+  "keywords": [
+    "jira",
+    "mcp",
+    "ticket",
+    "orchestration"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "axios": "^1.7.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}

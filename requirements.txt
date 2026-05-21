@@ -1,0 +1,6 @@
+azure-devops
+python-dotenv
+jira
+openai
+flask
+requests
