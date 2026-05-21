@@ -28,3 +28,4 @@ try:
         print(project.key, project.name)
 except Exception as e:
     print(f"Connection/auth error: {e}")
+

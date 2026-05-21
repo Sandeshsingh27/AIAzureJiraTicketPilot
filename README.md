@@ -13,16 +13,27 @@ A comprehensive Jira automation system with AI-powered ticket routing and a Mode
 ## Project Structure
 
 ```
-├── ticket_orchestrator.py      # Main orchestration engine
-├── jira_connect.py             # Jira connectivity helper
-├── jira-mcp-server.js          # MCP server for Claude/Cline
-├── ai_client.py                # AI classification using GitHub Models
-├── azure_devops_connect.py     # Azure DevOps integration
-├── .env.example                # Environment variables template
-├── requirements.txt            # Python dependencies
-├── package.json                # Node.js dependencies
-├── cline_mcp_config.json       # MCP configuration for Cline
-└── markupFiles/                # Consolidated project docs
+├── ticket_modules/                     # Module-oriented source package
+│   ├── orchestrator.py                 # Main orchestration engine
+│   ├── clients/
+│   │   ├── ai_client.py                # AI classification using GitHub Models
+│   │   ├── jira_connect.py             # Jira connectivity helper
+│   │   └── azure_devops_connect.py     # Azure DevOps integration
+│   ├── chat/
+│   │   └── chat_agent.py               # JiraCopilot chat logic
+│   └── web/
+│       └── ui_app.py                   # Flask web UI
+├── ticket_orchestrator.py              # Backward-compatible entrypoint
+├── ai_client.py                        # Backward-compatible export shim
+├── jira_connect.py                     # Backward-compatible entrypoint
+├── chat_agent.py                       # Backward-compatible export shim
+├── ui_app.py                           # Backward-compatible entrypoint
+├── jira-mcp-server.js                  # MCP server for Claude/Cline
+├── .env.example                        # Environment variables template
+├── requirements.txt                    # Python dependencies
+├── package.json                        # Node.js dependencies
+├── cline_mcp_config.json               # MCP configuration for Cline
+└── markupFiles/                        # Consolidated project docs
 ```
 
 ## Prerequisites

@@ -579,3 +579,4 @@ def run_chat(history: list, user_message: str, max_steps: int = 8):
         "history":    [m for m in messages if m["role"] != "system"],
         "tool_trace": tool_trace,
     }
+
