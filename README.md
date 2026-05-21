@@ -22,7 +22,7 @@ A comprehensive Jira automation system with AI-powered ticket routing and a Mode
 ├── requirements.txt            # Python dependencies
 ├── package.json                # Node.js dependencies
 ├── cline_mcp_config.json       # MCP configuration for Cline
-└── MCP_SETUP_GUIDE.md          # Detailed MCP setup guide
+└── markupFiles/                # Consolidated project docs
 ```
 
 ## Prerequisites
@@ -282,4 +282,5 @@ MIT
 - Keep `.env` and credentials secure
 - Test with `DRY_RUN=true` before enabling live mode
 - Monitor ticket routing accuracy and adjust keyword rules as needed
-- For support, see MCP_SETUP_GUIDE.md for detailed configuration
+- For setup help, see `markupFiles/GETTING_STARTED.md`
+- For technical details, see `markupFiles/REFERENCE.md`
