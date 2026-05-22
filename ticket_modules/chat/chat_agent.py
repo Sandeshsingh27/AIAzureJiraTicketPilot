@@ -6,6 +6,7 @@ import os
 import json
 import re
 import requests
+from pathlib import Path
 from openai import OpenAI
 from dotenv import load_dotenv
 from ticket_modules.support_ticket_analyzer import run as run_support_ticket_analysis
@@ -49,6 +50,25 @@ def _build_status_exclusion_clause():
 
 _STATUS_CLAUSE = _build_status_exclusion_clause()
 _SCOPE_CLAUSE  = _PROJECT_CLAUSE + (" AND " + _STATUS_CLAUSE if _STATUS_CLAUSE else "")
+
+KEYWORDS_FILE = Path(__file__).resolve().parents[2] / "ticket_analysis_keywords.json"
+
+
+def _load_availability_keywords() -> list[str]:
+    defaults = ["hotel not available", "hotel unavailable", "hotel not bookable"]
+    try:
+        payload = json.loads(KEYWORDS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return defaults
+    raw = payload.get("availabilityKeywords") if isinstance(payload, dict) else None
+    if not isinstance(raw, list):
+        return defaults
+    out: list[str] = []
+    for item in raw:
+        text = str(item or "").strip()
+        if text and text.lower() not in [x.lower() for x in out]:
+            out.append(text)
+    return out or defaults
 
 SYSTEM_PROMPT = (
     "You are JiraCopilot — a helpful assistant scoped to the Jira projects "
@@ -357,16 +377,209 @@ def tool_analyze_support_ticket(issueKey: str, sinceHours: int = 24, executeApi:
         return {"error": str(e)}
 
 
+def tool_analyze_bulk_dry_run(
+    sinceHours: int = 24,
+    sampleSize: int = 3,
+    extraKeywords: list | None = None,
+    executeApi: bool = False,
+    enableJiraComment: bool = False,
+):
+    """Run CRSUP-only bulk keyword analysis in dry-run mode with optional API/comment toggles."""
+    keywords = _load_availability_keywords()
+    extras: list[str] = []
+    for item in (extraKeywords or []):
+        text = str(item or "").strip()
+        if text and text.lower() not in [x.lower() for x in extras]:
+            extras.append(text)
+
+    combined: list[str] = []
+    for item in keywords + extras:
+        if item.lower() not in [x.lower() for x in combined]:
+            combined.append(item)
+    if not combined:
+        return {"error": "No keywords available for bulk analysis."}
+
+    size = max(1, min(int(sampleSize), 10))
+    phrase_clause = " OR ".join([f'text ~ "\\"{kw}\\""' for kw in combined])
+    jql = (
+        f'(project = "CRSUP" AND statusCategory != Done AND ({phrase_clause})) '
+        f"AND {_SCOPE_CLAUSE} ORDER BY updated DESC"
+    )
+
+    search = tool_search_issues(jql=jql, maxResults=size)
+    if search.get("error"):
+        return search
+
+    issues = search.get("issues") or []
+    picked_tickets = [
+        {"issueKey": i.get("key"), "summary": i.get("summary")}
+        for i in issues
+        if i.get("key")
+    ]
+    results = []
+    for issue in issues:
+        key = issue.get("key")
+        if not key:
+            continue
+        try:
+            analysis = run_support_ticket_analysis(
+                issue_key=key,
+                since_hours=int(sinceHours),
+                execute_api=bool(executeApi),
+                output_path=None,
+                comment_jira=bool(enableJiraComment),
+                preview_jira_comment=True,
+            )
+            results.append({
+                "issueKey": key,
+                "summary": issue.get("summary"),
+                "analyzed": True,
+                "dryRun": True,
+                "executeApi": bool(executeApi),
+                "jiraCommentPostingEnabled": bool(enableJiraComment),
+                "jiraComment": analysis.get("jiraComment"),
+                "wouldCommentPreview": (
+                    ((analysis.get("jiraComment") or {}).get("comments") or [None])[0]
+                    or (analysis.get("jiraComment") or {}).get("comment")
+                ),
+                "singleAvailExecution": analysis.get("singleAvailExecution"),
+                "singleAvailResponseStatus": (analysis.get("singleAvailResponse") or {}).get("statusCode"),
+                "newRelicSampleCount": (analysis.get("newRelic") or {}).get("sampleCount"),
+            })
+        except Exception as exc:
+            results.append({
+                "issueKey": key,
+                "summary": issue.get("summary"),
+                "analyzed": False,
+                "dryRun": True,
+                "error": str(exc),
+            })
+
+    return {
+        "mode": "bulk-keyword-analysis-dry-run",
+        "project": "CRSUP",
+        "dryRun": True,
+        "sampleSizeRequested": size,
+        "sampleSizeMeaning": "Number of latest matching CRSUP tickets analyzed in this run.",
+        "keywordsFromConfig": keywords,
+        "keywordsFromInput": extras,
+        "keywordsUsed": combined,
+        "executeApi": bool(executeApi),
+        "jiraCommentPreviewEnabled": True,
+        "jiraCommentPostingEnabled": bool(enableJiraComment),
+        "effective_jql": search.get("effective_jql") or jql,
+        "ticketsMatched": len(issues),
+        "pickedTickets": picked_tickets,
+        "results": results,
+        "note": "Dry-run utility for CRSUP. Keep enableJiraComment=false for safe testing.",
+    }
+
+
+def _build_bulk_dry_run_reply(result: dict, args: dict) -> str:
+    if result.get("error"):
+        return f"Bulk dry-run failed: {result.get('error')}"
+
+    picked = result.get("pickedTickets") or []
+    lines: list[str] = [
+        "Ran CRSUP bulk dry-run directly (bypassing LLM parsing to avoid content-filter false positives).",
+        f"Matched {result.get('ticketsMatched', 0)} ticket(s).",
+        f"Picked (sample): {', '.join([p.get('issueKey', '?') for p in picked]) if picked else 'none'}",
+        f"executeApi={bool(args.get('executeApi'))}, enableJiraComment={bool(args.get('enableJiraComment'))}",
+        "",
+        "Dry-run log:",
+    ]
+
+    for item in result.get("results") or []:
+        key = item.get("issueKey") or "?"
+        status = "ok" if item.get("analyzed") else "error"
+        nr_count = item.get("newRelicSampleCount")
+        api_status = item.get("singleAvailResponseStatus")
+        lines.append(
+            f"- {key}: analyzed={status}, newRelicSampleCount={nr_count}, singleAvailResponseStatus={api_status}"
+        )
+        preview = item.get("wouldCommentPreview")
+        if preview:
+            preview_text = str(preview).strip().replace("\n", " ")
+            if len(preview_text) > 220:
+                preview_text = preview_text[:220] + "..."
+            lines.append(f"  would-be Jira comment: {preview_text}")
+
+    return "\n".join(lines)
+
+
 TOOL_FNS = {
     "search_issues":  tool_search_issues,
     "search_concept": tool_search_concept,
     "analyze_support_ticket": tool_analyze_support_ticket,
+    "analyze_bulk_dry_run": tool_analyze_bulk_dry_run,
     "get_issue":      tool_get_issue,
     "create_issue":   tool_create_issue,
     "add_comment":    tool_add_comment,
     "assign_issue":   tool_assign_issue,
     "link_issues":    tool_link_issues,
 }
+
+
+def _parse_bool_token(value: str, default: bool) -> bool:
+    text = str(value or "").strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
+def _extract_bulk_dry_run_args(user_message: str) -> dict | None:
+    text = (user_message or "").strip()
+    lower = text.lower()
+
+    is_bulk_natural = "bulk dry-run" in lower and "crsup" in lower
+    is_bulk_slash = lower.startswith("/bulk-dry-run")
+    if not (is_bulk_natural or is_bulk_slash):
+        return None
+
+    args = {
+        "sinceHours": 24,
+        "sampleSize": 3,
+        "extraKeywords": [],
+        "executeApi": False,
+        "enableJiraComment": False,
+    }
+
+    # Parse key=value tokens for slash-command style.
+    for key, val in re.findall(r"\b(sinceHours|sampleSize|executeApi|enableJiraComment)\s*=\s*([^,;\s]+)", text, flags=re.IGNORECASE):
+        k = key.lower()
+        if k == "sincehours" and str(val).isdigit():
+            args["sinceHours"] = int(val)
+        elif k == "samplesize" and str(val).isdigit():
+            args["sampleSize"] = int(val)
+        elif k == "executeapi":
+            args["executeApi"] = _parse_bool_token(val, args["executeApi"])
+        elif k == "enablejiracomment":
+            args["enableJiraComment"] = _parse_bool_token(val, args["enableJiraComment"])
+
+    # Parse natural-language variants.
+    m = re.search(r"sample\s*size\s*(\d+)", lower)
+    if m:
+        args["sampleSize"] = int(m.group(1))
+    m = re.search(r"last\s*(\d+)\s*hours?", lower)
+    if m:
+        args["sinceHours"] = int(m.group(1))
+    m = re.search(r"executeapi\s*(true|false|yes|no|on|off|1|0)", lower)
+    if m:
+        args["executeApi"] = _parse_bool_token(m.group(1), args["executeApi"])
+    m = re.search(r"enablejiracomment\s*(true|false|yes|no|on|off|1|0)", lower)
+    if m:
+        args["enableJiraComment"] = _parse_bool_token(m.group(1), args["enableJiraComment"])
+
+    # Parse "extra keywords: ..." list.
+    extra_match = re.search(r"extra\s*keywords\s*:\s*(.+)$", text, flags=re.IGNORECASE)
+    if extra_match:
+        raw = extra_match.group(1).strip()
+        parts = [p.strip() for p in re.split(r"[,;|]", raw) if p.strip()]
+        args["extraKeywords"] = parts
+
+    return args
 
 TOOLS_SCHEMA = [
     {
@@ -449,6 +662,31 @@ TOOLS_SCHEMA = [
                     "executeApi": {"type": "boolean", "default": False, "description": "Whether to call EC2 singleavail endpoint"},
                 },
                 "required": ["issueKey"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "analyze_bulk_dry_run",
+            "description": (
+                "Run CRSUP-only bulk dry-run analysis for availability keywords across a sample of tickets. "
+                "Supports executeApi toggle and optional Jira comment posting toggle. "
+                "Preview is included for testing."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sinceHours": {"type": "integer", "default": 24, "description": "Lookback window in hours"},
+                    "sampleSize": {"type": "integer", "default": 3, "description": "Number of latest matching CRSUP tickets to analyze (1-10)"},
+                    "extraKeywords": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional additional keyword phrases"
+                    },
+                    "executeApi": {"type": "boolean", "default": False, "description": "Whether to execute EC2 singleavail API"},
+                    "enableJiraComment": {"type": "boolean", "default": False, "description": "Whether to post Jira comments on analyzed tickets"},
+                },
             },
         },
     },
@@ -544,6 +782,20 @@ def run_chat(history: list, user_message: str, max_steps: int = 8):
     history = list of OpenAI-format messages from prior turns.
     Returns: { reply: str, history: [...], tool_trace: [...] }
     """
+    direct_bulk_args = _extract_bulk_dry_run_args(user_message)
+    if direct_bulk_args is not None:
+        result = tool_analyze_bulk_dry_run(**direct_bulk_args)
+        reply = _build_bulk_dry_run_reply(result, direct_bulk_args)
+        direct_history = (history or []) + [
+            {"role": "user", "content": user_message},
+            {"role": "assistant", "content": reply},
+        ]
+        return {
+            "reply": reply,
+            "history": direct_history,
+            "tool_trace": [{"tool": "analyze_bulk_dry_run", "args": direct_bulk_args, "result": result}],
+        }
+
     messages = [{"role": "system", "content": SYSTEM_PROMPT}] + (history or []) + [
         {"role": "user", "content": user_message}
     ]

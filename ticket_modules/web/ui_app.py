@@ -486,24 +486,62 @@ HTML = """
     <div style="padding:14px 18px; border-bottom:1px solid #334155; display:flex;
                 gap:10px; align-items:center; flex-wrap:wrap;">
       <span style="color:#38bdf8; font-weight:700; font-size:1rem;">💬 JiraCopilot</span>
-      <span style="color:#64748b; font-size:.8rem;">— Ask me to search, fetch, create, comment, or link Jira issues.</span>
+      <span style="color:#64748b; font-size:.8rem;">— Ask naturally or use prompt library below for common workflows.</span>
       <div style="flex:1;"></div>
       <button class="btn btn-gray" onclick="resetChat()" style="padding:6px 14px; font-size:.8rem;">🗑 New Chat</button>
     </div>
+
+    <div class="chat-utility-wrap">
+      <details class="prompt-help" open>
+        <summary>🧠 Prompt Library</summary>
+        <div class="prompt-form-row">
+          <div class="prompt-field">
+            <label>Category</label>
+            <select id="prompt-category" onchange="renderPromptTemplates()"></select>
+          </div>
+          <div class="prompt-field" style="flex:2;">
+            <label>Template</label>
+            <select id="prompt-template"></select>
+          </div>
+          <button class="btn btn-gray" onclick="insertSelectedPrompt(false)" style="padding:8px 14px; font-size:.8rem;">Insert</button>
+          <button class="btn btn-blue" onclick="insertSelectedPrompt(true)" style="padding:8px 14px; font-size:.8rem;">Insert & Send</button>
+        </div>
+      </details>
+
+      <details class="prompt-help">
+        <summary>📘 How to ask better</summary>
+        <div class="prompt-tips">
+          <div>- Mention issue key for single-ticket actions: <code>CRSUP-4421</code></div>
+          <div>- For bulk dry-run in chat: include <code>sample size</code>, <code>last N hours</code>, toggle flags</div>
+          <div>- Use <code>enableJiraComment false</code> for safe testing</div>
+          <div>- Add extra keywords with: <code>extra keywords: hotel closed, property suspended</code></div>
+        </div>
+      </details>
+    </div>
+
+    <details class="prompt-help" style="border-top:none;">
+      <summary>✨ Quick examples</summary>
+      <div class="prompt-grid">
+        <button class="prompt-chip" onclick="usePrompt('Find all open CRSUP tickets about Hotel Unavailable')">Find open CRSUP unavailable tickets</button>
+        <button class="prompt-chip" onclick="usePrompt('Show details of CRSUP-4421')">Show issue details</button>
+        <button class="prompt-chip" onclick="usePrompt('Analyze support ticket CRSUP-4421 for hotel unavailable. Check New Relic logs from last 24 hours and build the singleavail payload.')">Analyze single ticket</button>
+        <button class="prompt-chip" onclick="usePrompt('Run bulk dry-run analysis for CRSUP using sample size 3, last 24 hours, executeApi false, enableJiraComment false.')">Bulk dry run safe defaults</button>
+      </div>
+    </details>
 
     <!-- Messages area -->
     <div id="chat-messages" style="flex:1; overflow-y:auto; padding:18px;
                                    display:flex; flex-direction:column; gap:14px;">
       <div class="chat-msg chat-bot">
         <div class="chat-bubble">
-          👋 Hi! I'm JiraCopilot. Try things like:
+          👋 Hi! I'm JiraCopilot. You can use the example prompts section above, or try:
           <ul style="margin:8px 0 0 18px; color:#94a3b8;">
             <li>"Find all open CRSUP tickets about Hotel Unavailable"</li>
             <li>"Show details of CRSUP-4421"</li>
             <li>"Find similar tickets to CRSUP-4421, create a parent ticket and link them all"</li>
-            <li>"Add a comment to CRSUP-4421 saying 'Please check ASAP'"</li>
             <li>"Analyze support ticket CRSUP-4421 for hotel unavailable. Check New Relic logs from last 24 hours and build the singleavail payload."</li>
             <li>"Run end-to-end analysis for CRSUP-4421, include New Relic check, build payload, and execute the singleavail API call."</li>
+            <li>"Run bulk dry-run analysis for CRSUP using sample size 3, last 24 hours, executeApi false, enableJiraComment false."</li>
           </ul>
         </div>
       </div>
@@ -536,9 +574,9 @@ HTML = """
     <div class="help-card">
       <h3>🚀 Quick Start</h3>
       <ol>
-        <li>Open <code>🔧 Jira MCP Tools</code> tab for direct tool actions.</li>
-        <li>Use <code>💬 AI Chat</code> for natural language workflows.</li>
-        <li>Use <code>🤖 Ticket Orchestrator</code> to run routing end-to-end.</li>
+        <li>Use <code>🔧 Jira MCP Tools</code> when you want direct UI actions and structured inputs.</li>
+        <li>Use <code>💬 AI Chat</code> when you want natural-language workflows, prompt templates, and dry-run chat commands.</li>
+        <li>Use <code>🤖 Ticket Orchestrator</code> for routing and reassignment workflows.</li>
       </ol>
     </div>
     <div class="help-card">
@@ -548,7 +586,17 @@ HTML = """
         <li><b>Search Issues</b>: run raw JQL.</li>
         <li><b>Search Concept</b>: phrase-based search (comma-separated variants).</li>
         <li><b>Create / Comment / Assign / Link</b>: perform Jira actions directly.</li>
-        <li><b>Analyze Support Ticket</b>: Jira+New Relic+payload analysis from UI.</li>
+        <li><b>Analyze Support Ticket</b>: single-ticket Jira + New Relic + payload analysis.</li>
+        <li><b>Bulk Analyze (CRSUP Dry Run)</b>: sample-based keyword analysis for CRSUP tickets.</li>
+      </ul>
+    </div>
+    <div class="help-card">
+      <h3>💬 AI Chat Features</h3>
+      <ul>
+        <li>Use the <b>Prompt Library</b> dropdowns to insert common requests.</li>
+        <li>Use <b>Insert</b> to edit before sending, or <b>Insert &amp; Send</b> to run immediately.</li>
+        <li>Use <b>Quick examples</b> for one-click starter prompts.</li>
+        <li>Use the collapsible <b>How to ask better</b> section for dry-run syntax guidance.</li>
       </ul>
     </div>
     <div class="help-card">
@@ -558,6 +606,8 @@ HTML = """
         <li><code>Show details of CRSUP-4421</code></li>
         <li><code>Create a parent issue for these tickets and link them</code></li>
         <li><code>Analyze CRSUP-4421 for hotel unavailable and execute singleavail API</code></li>
+        <li><code>Run bulk dry-run analysis for CRSUP using sample size 3, last 24 hours, executeApi false, enableJiraComment false.</code></li>
+        <li><code>/bulk-dry-run sinceHours=24 sampleSize=5 executeApi=true enableJiraComment=false</code></li>
       </ul>
     </div>
     <div class="help-card">
@@ -566,7 +616,37 @@ HTML = """
         <li>Select <code>Analyze Support Ticket</code> in Jira MCP Tools.</li>
         <li>Enter issue key and lookback hours.</li>
         <li>Optionally tick <code>Execute API</code>.</li>
-        <li>Click <code>Analyze</code> and inspect payload + response in results.</li>
+        <li>Click <code>Analyze</code> and inspect payload, New Relic summary, response, and Jira comment result.</li>
+      </ol>
+    </div>
+    <div class="help-card">
+      <h3>📚 Bulk Analyze (CRSUP Dry Run) Steps</h3>
+      <ol>
+        <li>Select <code>Bulk Analyze (CRSUP Dry Run)</code> in Jira MCP Tools.</li>
+        <li>Set <code>Since (h)</code> and <code>Sample Size</code>.</li>
+        <li>Optionally add <code>Extra Keywords</code> to extend the backend keyword list.</li>
+        <li>Use <code>Execute API</code> only if you want EC2 singleavail executed during dry run.</li>
+        <li>Use <code>Enable Jira Comment Posting (CRSUP only)</code> only when you want real comments posted.</li>
+        <li>Otherwise keep both toggles off for safe production testing.</li>
+        <li>Review matched tickets, dry-run log, and would-be Jira comment preview in the result.</li>
+      </ol>
+    </div>
+    <div class="help-card">
+      <h3>🧩 Toggle Meanings</h3>
+      <ul>
+        <li><b>Execute API</b>: runs the EC2 singleavail call for the analyzed ticket(s).</li>
+        <li><b>Enable Jira Comment Posting (CRSUP only)</b>: posts actual Jira comments on CRSUP tickets.</li>
+        <li><b>Jira comment preview</b>: generated in dry-run results for testing when available.</li>
+        <li><b>Sample Size</b>: number of latest matching CRSUP tickets picked for bulk analysis.</li>
+      </ul>
+    </div>
+    <div class="help-card">
+      <h3>🛡 Safety Rules</h3>
+      <ul>
+        <li>Bulk analysis is restricted to <code>CRSUP</code>.</li>
+        <li>Both bulk toggles default to off for safe production testing.</li>
+        <li>If core identifiers are missing from a ticket, analyzer skips broad NRQL fallback and asks for required fields.</li>
+        <li>Availability keywords come from the backend config and optional extra keywords you provide.</li>
       </ol>
     </div>
   </div>
@@ -586,6 +666,18 @@ HTML = """
 .chat-bubble code { background:#0a0f1e; padding:1px 6px; border-radius:4px; font-size:.85em; }
 .chat-typing { color:#94a3b8; font-style:italic; }
 .chat-typing::after { content:'▎'; animation:blink 1s infinite; }
+.chat-utility-wrap { border-top:1px solid #334155; background:#0f172a; }
+.prompt-help { border-top:1px solid #334155; background:#0f172a; padding:10px 18px; }
+.prompt-help summary { cursor:pointer; color:#94a3b8; font-size:.82rem; }
+.prompt-form-row { margin-top:10px; display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap; }
+.prompt-field { display:flex; flex-direction:column; min-width:180px; flex:1; }
+.prompt-field label { font-size:.75rem; color:#94a3b8; margin-bottom:4px; }
+.prompt-field select { background:#1e293b; border:1px solid #334155; color:#e2e8f0; border-radius:7px; padding:8px 10px; font-size:.82rem; }
+.prompt-grid { margin-top:10px; display:flex; flex-wrap:wrap; gap:8px; }
+.prompt-chip { background:#1e293b; border:1px solid #334155; color:#cbd5e1; border-radius:999px;
+               padding:6px 10px; font-size:.78rem; cursor:pointer; }
+.prompt-chip:hover { border-color:#3b82f6; color:#e2e8f0; }
+.prompt-tips { margin-top:10px; display:grid; gap:6px; color:#cbd5e1; font-size:.8rem; }
 @keyframes blink { 50% { opacity:0; } }
 </style>
 
@@ -612,6 +704,21 @@ function switchJiraTool() {
 
 // ── AI Chat (JiraCopilot) ─────────────────────────────────────
 let chatHistory = [];
+const PROMPT_LIBRARY = {
+  'Search & Discovery': [
+    'Find all open CRSUP tickets about Hotel Unavailable',
+    'Show details of CRSUP-4421',
+    'Find similar tickets to CRSUP-4421, create a parent ticket and link them all'
+  ],
+  'Single Ticket Analysis': [
+    'Analyze support ticket CRSUP-4421 for hotel unavailable. Check New Relic logs from last 24 hours and build the singleavail payload.',
+    'Run end-to-end analysis for CRSUP-4421, include New Relic check, build payload, and execute the singleavail API call.'
+  ],
+  'Bulk Dry Run (CRSUP)': [
+    'Run bulk dry-run analysis for CRSUP using sample size 3, last 24 hours, executeApi false, enableJiraComment false.',
+    'Run bulk dry-run analysis for CRSUP with extra keywords: hotel closed, property suspended; sample size 5; executeApi true; enableJiraComment false.'
+  ]
+};
 
 function linkifyKeys(text) {
   if (!text) return '';
@@ -657,6 +764,42 @@ function showTyping() {
 function clearTyping() {
   const t = document.getElementById('chat-typing-wrap');
   if (t) t.remove();
+}
+
+function initPromptLibrary() {
+  const category = document.getElementById('prompt-category');
+  if (!category) return;
+  const keys = Object.keys(PROMPT_LIBRARY);
+  category.innerHTML = keys.map(k => `<option value="${escapeHtml(k)}">${escapeHtml(k)}</option>`).join('');
+  renderPromptTemplates();
+}
+
+function renderPromptTemplates() {
+  const category = document.getElementById('prompt-category');
+  const template = document.getElementById('prompt-template');
+  if (!category || !template) return;
+  const key = category.value;
+  const list = PROMPT_LIBRARY[key] || [];
+  template.innerHTML = list.map((prompt, idx) => `<option value="${idx}">${escapeHtml(prompt)}</option>`).join('');
+}
+
+function insertSelectedPrompt(sendNow) {
+  const category = document.getElementById('prompt-category');
+  const template = document.getElementById('prompt-template');
+  const input = document.getElementById('chat-input');
+  if (!category || !template || !input) return;
+  const list = PROMPT_LIBRARY[category.value] || [];
+  const prompt = list[parseInt(template.value, 10)] || '';
+  if (!prompt) return;
+  input.value = prompt;
+  input.focus();
+  if (sendNow) sendChat();
+}
+
+function usePrompt(text) {
+  const input = document.getElementById('chat-input');
+  input.value = text;
+  input.focus();
 }
 
 function resetChat() {
@@ -1143,6 +1286,8 @@ async function analyzeBulkDryRun() {
   });
   showResult('jira-result', await r.json());
 }
+
+initPromptLibrary();
 </script>
 </body>
 </html>
