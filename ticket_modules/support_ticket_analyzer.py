@@ -1242,6 +1242,53 @@ def _singleavail_has_open_status(value: Any) -> bool:
     return False
 
 
+def _missing_core_filter_groups(indicators: Dict[str, Any]) -> List[str]:
+    """Return missing core identifiers required for reliable NRQL filtering.
+
+    Notes:
+      - arrival/departure/museId/bookingSource are intentionally not treated as
+        sufficient by themselves.
+      - Alias pairs are accepted (customerKey|kKey, companyKey|fKey).
+    """
+    groups = [
+        ("hrCode", "hrCode"),
+        ("hKey", "hKey"),
+        ("chainId", "chainId"),
+        ("customerKey/kKey", "customerKey", "kKey"),
+        ("companyKey/fKey", "companyKey", "fKey"),
+    ]
+
+    missing: List[str] = []
+    for group in groups:
+        label, *keys = group
+        present = False
+        for key in keys:
+            value = indicators.get(key)
+            if value is None:
+                continue
+            if isinstance(value, str) and not value.strip():
+                continue
+            present = True
+            break
+        if not present:
+            missing.append(label)
+    return missing
+
+
+def _build_missing_fields_jira_comment(missing_core_fields: List[str]) -> str:
+    missing_lines = "\n".join(f"- {item}" for item in missing_core_fields)
+    return (
+        "Hi Team,\n\n"
+        "Ticket Orchestrator could not run reliable New Relic analysis because core filtering fields are missing.\n\n"
+        "Please update the ticket description/comments with these fields:\n"
+        f"{missing_lines}\n\n"
+        "(arrivalDate/departureDate/museId/bookingSource alone are not sufficient for this workflow.)\n\n"
+        "Once added, re-run analysis.\n\n"
+        "Regards,\n"
+        "Ticket Orchestrator"
+    )
+
+
 def run(
     issue_key: str,
     since_hours: int,
@@ -1281,6 +1328,100 @@ def run(
     issue = fetch_jira_issue(issue_key=issue_key, jira_url=jira_url, jira_pat=jira_pat)
     indicators = parse_ticket_indicators(issue)
 
+    missing_core_fields = _missing_core_filter_groups(indicators)
+    missing_filter_inputs = len(missing_core_fields) == 5
+
+    jira_comment_result: Optional[Dict[str, Any]] = {
+        "attempted": False,
+        "posted": False,
+        "reason": "Jira comment skipped because EC2 API call was not requested",
+    }
+
+    if missing_filter_inputs:
+        missing_fields_comment = _build_missing_fields_jira_comment(missing_core_fields)
+        if comment_jira:
+            if jira_comment_exists(issue, missing_fields_comment):
+                jira_comment_result = {
+                    "attempted": False,
+                    "posted": False,
+                    "reason": "missing-fields guidance comment already exists",
+                    "comment": missing_fields_comment,
+                }
+            else:
+                try:
+                    jira_comment_result = add_jira_comment(
+                        issue_key=issue_key,
+                        jira_url=jira_url,
+                        jira_pat=jira_pat,
+                        comment=missing_fields_comment,
+                    )
+                except Exception as exc:
+                    jira_comment_result = {
+                        "attempted": True,
+                        "posted": False,
+                        "error": str(exc),
+                        "comment": missing_fields_comment,
+                    }
+        elif preview_jira_comment:
+            jira_comment_result = {
+                "attempted": False,
+                "posted": False,
+                "dryRun": True,
+                "reason": "Jira comment posting disabled for this run",
+                "commentPlanCount": 1,
+                "comments": [missing_fields_comment],
+            }
+        else:
+            jira_comment_result = {
+                "attempted": False,
+                "posted": False,
+                "dryRun": True,
+                "reason": "Jira comment flow disabled for this run",
+            }
+
+        nr_summary = {
+            "matched": 0,
+            "successful": False,
+            "successCount": 0,
+            "failureCount": 0,
+            "latest": {},
+            "derived": {},
+            "skipped": True,
+            "skipReason": "Missing investigation fields in ticket; NRQL query skipped to avoid broad fallback search.",
+            "missingCoreFilterFields": missing_core_fields,
+        }
+        singleavail_execution = {
+            "requested": bool(execute_api),
+            "performed": False,
+            "reason": "EC2 API call skipped because required ticket fields are missing",
+        }
+        result = {
+            "ticket": {
+                "key": issue.get("key"),
+                "summary": _safe_get(issue, "fields.summary"),
+                "url": f"{jira_url.rstrip('/')}/browse/{issue.get('key')}",
+            },
+            "indicators": indicators,
+            "newRelic": {
+                "accountId": int(nr_account_id),
+                "graphqlUrl": nr_graphql_url,
+                "tlsVerify": nr_tls_verify,
+                "nrql": None,
+                "summary": nr_summary,
+                "diagnostics": None,
+                "sampleCount": 0,
+                "sample": [],
+            },
+            "singleAvailPayload": None,
+            "singleAvailExecution": singleavail_execution,
+            "singleAvailResponse": None,
+            "jiraComment": jira_comment_result,
+        }
+        if output_path:
+            with open(output_path, "w", encoding="utf-8") as fp:
+                json.dump(result, fp, indent=2)
+        return result
+
     nrql = build_nrql(indicators, since_hours=since_hours, log_tables=nr_log_tables)
     logs = query_new_relic_logs(
         account_id=int(nr_account_id),
@@ -1309,11 +1450,6 @@ def run(
         "requested": bool(execute_api),
         "performed": False,
         "reason": "EC2 API call not requested (--execute-api not provided)",
-    }
-    jira_comment_result: Optional[Dict[str, Any]] = {
-        "attempted": False,
-        "posted": False,
-        "reason": "Jira comment skipped because EC2 API call was not requested",
     }
     if execute_api:
         api_url = os.getenv("EC2_SINGLEAVAIL_URL", DEFAULT_SINGLEAVAIL_URL).strip()
