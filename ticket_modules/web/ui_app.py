@@ -18,6 +18,7 @@ import requests
 from pathlib import Path
 from flask import Flask, render_template_string, request, jsonify, Response, stream_with_context
 from dotenv import load_dotenv
+from ticket_modules.support_ticket_analyzer import run as run_support_ticket_analysis
 
 try:
     from ticket_modules.chat.chat_agent import run_chat as _agent_run_chat
@@ -127,6 +128,11 @@ HTML = """
                   border-radius:8px; padding:12px; font-family:monospace; font-size:.82rem;
                   color:#86efac; min-height:60px; max-height:260px; overflow-y:auto;
                   white-space:pre-wrap; display:none; }
+    .help-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:16px; }
+    .help-card { background:#1e293b; border:1px solid #334155; border-radius:10px; padding:16px; }
+    .help-card h3 { color:#38bdf8; margin-bottom:8px; font-size:1rem; }
+    .help-card ol, .help-card ul { margin:8px 0 0 18px; color:#cbd5e1; line-height:1.5; }
+    .help-card code { background:#0a0f1e; padding:2px 6px; border-radius:5px; }
     .spinner { display:inline-block; width:14px; height:14px; border:2px solid #94a3b8;
                border-top-color:#3b82f6; border-radius:50%; animation:spin .7s linear infinite;
                margin-left:8px; vertical-align:middle; }
@@ -161,6 +167,7 @@ HTML = """
   <button class="tab-btn active" onclick="switchTab('orchestrator',this)">🤖 Ticket Orchestrator</button>
   <button class="tab-btn"        onclick="switchTab('jira',this)">🔧 Jira MCP Tools</button>
   <button class="tab-btn"        onclick="switchTab('chat',this)">💬 AI Chat</button>
+  <button class="tab-btn"        onclick="switchTab('howto',this)">📘 How To Use</button>
 </div>
 
 <!-- ══════════════════ TAB 1: Ticket Orchestrator ══════════════════ -->
@@ -251,8 +258,12 @@ HTML = """
                      padding:11px 14px; border-radius:8px; font-size:.95rem; font-weight:600;">
         <option value="get">🔍 Get Issue</option>
         <option value="search">🔎 Search Issues (JQL)</option>
+        <option value="concept">🧠 Search Concept</option>
         <option value="create">➕ Create Issue</option>
         <option value="comment">💬 Add Comment</option>
+        <option value="assign">👤 Assign Issue</option>
+        <option value="link">🔗 Link Issues</option>
+        <option value="analyze">🧪 Analyze Support Ticket</option>
       </select>
     </div>
 
@@ -282,6 +293,22 @@ HTML = """
                       padding:11px 14px; border-radius:8px; font-size:.95rem;"/>
       </div>
       <button class="btn btn-blue" onclick="searchIssues()" style="padding:11px 28px; font-size:.95rem;">Search</button>
+    </div>
+
+    <!-- Search Concept inputs -->
+    <div class="jira-inputs" id="inputs-concept" style="display:none; flex:2; gap:12px; align-items:flex-end; flex-wrap:wrap;">
+      <div style="display:flex; flex-direction:column; flex:2; min-width:300px;">
+        <label style="font-size:.82rem; color:#94a3b8; margin-bottom:6px;">Phrases (comma-separated)</label>
+        <input type="text" id="sc-phrases" placeholder="hotel unavailable, hotel not available, property unavailable"
+               style="background:#0f172a; border:1px solid #334155; color:#e2e8f0; padding:11px 14px; border-radius:8px; font-size:.95rem;"/>
+      </div>
+      <div style="display:flex; flex-direction:column; width:130px;">
+        <label style="font-size:.82rem; color:#94a3b8; margin-bottom:6px;">Field</label>
+        <select id="sc-field" style="background:#0f172a; border:1px solid #334155; color:#e2e8f0; padding:11px 14px; border-radius:8px; font-size:.95rem;">
+          <option value="text">text</option><option value="summary">summary</option><option value="description">description</option><option value="comment">comment</option>
+        </select>
+      </div>
+      <button class="btn btn-blue" onclick="searchConcept()" style="padding:11px 28px; font-size:.95rem;">Search</button>
     </div>
 
     <!-- Create Issue inputs -->
@@ -331,6 +358,59 @@ HTML = """
                       padding:11px 14px; border-radius:8px; font-size:.95rem;"/>
       </div>
       <button class="btn btn-green" onclick="addComment()" style="padding:11px 28px; font-size:.95rem;">Post</button>
+    </div>
+
+    <!-- Assign Issue inputs -->
+    <div class="jira-inputs" id="inputs-assign" style="display:none; flex:2; gap:12px; align-items:flex-end; flex-wrap:wrap;">
+      <div style="display:flex; flex-direction:column; width:200px;">
+        <label style="font-size:.82rem; color:#94a3b8; margin-bottom:6px;">Issue Key</label>
+        <input type="text" id="as-key" placeholder="e.g. CRSUP-4421"
+               style="background:#0f172a; border:1px solid #334155; color:#e2e8f0; padding:11px 14px; border-radius:8px; font-size:.95rem;"/>
+      </div>
+      <div style="display:flex; flex-direction:column; width:220px;">
+        <label style="font-size:.82rem; color:#94a3b8; margin-bottom:6px;">Assignee (username)</label>
+        <input type="text" id="as-user" placeholder="e.g. nsh50"
+               style="background:#0f172a; border:1px solid #334155; color:#e2e8f0; padding:11px 14px; border-radius:8px; font-size:.95rem;"/>
+      </div>
+      <button class="btn btn-green" onclick="assignIssue()" style="padding:11px 28px; font-size:.95rem;">Assign</button>
+    </div>
+
+    <!-- Link Issues inputs -->
+    <div class="jira-inputs" id="inputs-link" style="display:none; flex:2; gap:12px; align-items:flex-end; flex-wrap:wrap;">
+      <div style="display:flex; flex-direction:column; width:180px;">
+        <label style="font-size:.82rem; color:#94a3b8; margin-bottom:6px;">Inward Issue</label>
+        <input type="text" id="li-inward" placeholder="e.g. CRSUP-5000"
+               style="background:#0f172a; border:1px solid #334155; color:#e2e8f0; padding:11px 14px; border-radius:8px; font-size:.95rem;"/>
+      </div>
+      <div style="display:flex; flex-direction:column; width:180px;">
+        <label style="font-size:.82rem; color:#94a3b8; margin-bottom:6px;">Outward Issue</label>
+        <input type="text" id="li-outward" placeholder="e.g. CRSUP-5001"
+               style="background:#0f172a; border:1px solid #334155; color:#e2e8f0; padding:11px 14px; border-radius:8px; font-size:.95rem;"/>
+      </div>
+      <div style="display:flex; flex-direction:column; width:150px;">
+        <label style="font-size:.82rem; color:#94a3b8; margin-bottom:6px;">Link Type</label>
+        <input type="text" id="li-type" value="Relates"
+               style="background:#0f172a; border:1px solid #334155; color:#e2e8f0; padding:11px 14px; border-radius:8px; font-size:.95rem;"/>
+      </div>
+      <button class="btn btn-green" onclick="linkIssues()" style="padding:11px 28px; font-size:.95rem;">Link</button>
+    </div>
+
+    <!-- Analyze Support Ticket inputs -->
+    <div class="jira-inputs" id="inputs-analyze" style="display:none; flex:2; gap:12px; align-items:flex-end; flex-wrap:wrap;">
+      <div style="display:flex; flex-direction:column; width:200px;">
+        <label style="font-size:.82rem; color:#94a3b8; margin-bottom:6px;">Issue Key</label>
+        <input type="text" id="an-key" placeholder="e.g. CRSUP-4421"
+               style="background:#0f172a; border:1px solid #334155; color:#e2e8f0; padding:11px 14px; border-radius:8px; font-size:.95rem;"/>
+      </div>
+      <div style="display:flex; flex-direction:column; width:120px;">
+        <label style="font-size:.82rem; color:#94a3b8; margin-bottom:6px;">Since (h)</label>
+        <input type="number" id="an-hours" value="24" min="1" max="240"
+               style="background:#0f172a; border:1px solid #334155; color:#e2e8f0; padding:11px 14px; border-radius:8px; font-size:.95rem;"/>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px; color:#cbd5e1; font-size:.9rem;">
+        <input type="checkbox" id="an-exec" /> Execute API
+      </div>
+      <button class="btn btn-blue" onclick="analyzeSupportTicket()" style="padding:11px 28px; font-size:.95rem;">Analyze</button>
     </div>
   </div>
 
@@ -389,6 +469,48 @@ HTML = """
                        font-family:inherit;"></textarea>
       <button class="btn btn-blue" id="chat-send-btn" onclick="sendChat()"
               style="padding:11px 24px; font-size:.95rem;">Send</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════ TAB 4: How To Use ══════════════════ -->
+<div id="tab-howto" class="tab-content">
+  <div class="help-grid">
+    <div class="help-card">
+      <h3>🚀 Quick Start</h3>
+      <ol>
+        <li>Open <code>🔧 Jira MCP Tools</code> tab for direct tool actions.</li>
+        <li>Use <code>💬 AI Chat</code> for natural language workflows.</li>
+        <li>Use <code>🤖 Ticket Orchestrator</code> to run routing end-to-end.</li>
+      </ol>
+    </div>
+    <div class="help-card">
+      <h3>🔧 Jira MCP Tools (UI)</h3>
+      <ul>
+        <li><b>Get Issue</b>: fetch ticket details by key.</li>
+        <li><b>Search Issues</b>: run raw JQL.</li>
+        <li><b>Search Concept</b>: phrase-based search (comma-separated variants).</li>
+        <li><b>Create / Comment / Assign / Link</b>: perform Jira actions directly.</li>
+        <li><b>Analyze Support Ticket</b>: Jira+New Relic+payload analysis from UI.</li>
+      </ul>
+    </div>
+    <div class="help-card">
+      <h3>💬 Example Chat Prompts</h3>
+      <ul>
+        <li><code>Find all open CRSUP tickets about hotel unavailable</code></li>
+        <li><code>Show details of CRSUP-4421</code></li>
+        <li><code>Create a parent issue for these tickets and link them</code></li>
+        <li><code>Analyze CRSUP-4421 for hotel unavailable and execute singleavail API</code></li>
+      </ul>
+    </div>
+    <div class="help-card">
+      <h3>🧪 Analyze Support Ticket Steps</h3>
+      <ol>
+        <li>Select <code>Analyze Support Ticket</code> in Jira MCP Tools.</li>
+        <li>Enter issue key and lookback hours.</li>
+        <li>Optionally tick <code>Execute API</code>.</li>
+        <li>Click <code>Analyze</code> and inspect payload + response in results.</li>
+      </ol>
     </div>
   </div>
 </div>
@@ -863,6 +985,23 @@ async function searchIssues() {
   else showResult('jira-result', data);
 }
 
+// ── Search Concept ─────────────────────────────────────────────
+async function searchConcept() {
+  const raw = document.getElementById('sc-phrases').value.trim();
+  const field = document.getElementById('sc-field').value;
+  if (!raw) { alert('Enter comma-separated phrases'); return; }
+  const phrases = raw.split(',').map(s => s.trim()).filter(Boolean);
+  if (!phrases.length) { alert('Enter valid phrases'); return; }
+  showResult('jira-result', 'Searching concept...');
+  const r = await fetch('/jira/search-concept', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({phrases, field, maxResults: 20})
+  });
+  const data = await r.json();
+  if (Array.isArray(data.issues)) showTable('jira-result', data.issues);
+  else showResult('jira-result', data);
+}
+
 // ── Create Issue ─────────────────────────────────────────────
 async function createIssue() {
   const project = document.getElementById('ci-project').value.trim();
@@ -887,6 +1026,47 @@ async function addComment() {
   const r = await fetch('/jira/add-comment', {
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({issueKey, comment})
+  });
+  showResult('jira-result', await r.json());
+}
+
+// ── Assign Issue ───────────────────────────────────────────────
+async function assignIssue() {
+  const issueKey = document.getElementById('as-key').value.trim();
+  const assignee = document.getElementById('as-user').value.trim();
+  if (!issueKey || !assignee) { alert('Issue key and assignee are required'); return; }
+  showResult('jira-result', 'Assigning...');
+  const r = await fetch('/jira/assign-issue', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({issueKey, assignee})
+  });
+  showResult('jira-result', await r.json());
+}
+
+// ── Link Issues ───────────────────────────────────────────────
+async function linkIssues() {
+  const inwardIssue = document.getElementById('li-inward').value.trim();
+  const outwardIssue = document.getElementById('li-outward').value.trim();
+  const linkType = document.getElementById('li-type').value.trim() || 'Relates';
+  if (!inwardIssue || !outwardIssue) { alert('Both issue keys are required'); return; }
+  showResult('jira-result', 'Linking...');
+  const r = await fetch('/jira/link-issues', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({inwardIssue, outwardIssue, linkType})
+  });
+  showResult('jira-result', await r.json());
+}
+
+// ── Analyze Support Ticket ─────────────────────────────────────
+async function analyzeSupportTicket() {
+  const issueKey = document.getElementById('an-key').value.trim();
+  const sinceHours = parseInt(document.getElementById('an-hours').value, 10) || 24;
+  const executeApi = document.getElementById('an-exec').checked;
+  if (!issueKey) { alert('Issue key is required'); return; }
+  showResult('jira-result', 'Analyzing...');
+  const r = await fetch('/jira/analyze-support-ticket', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({issueKey, sinceHours, executeApi})
   });
   showResult('jira-result', await r.json());
 }
@@ -1108,6 +1288,17 @@ def _jira_post(path, payload):
         return {"error": str(e)}, 500
 
 
+def _jira_put(path, payload):
+    try:
+        r = requests.put(f"{JIRA_URL}{path}", headers=JIRA_HEADERS, json=payload, timeout=15)
+        r.raise_for_status()
+        return (r.json() if r.text else {}), r.status_code
+    except requests.HTTPError as e:
+        return {"error": str(e), "detail": e.response.text}, e.response.status_code
+    except Exception as e:
+        return {"error": str(e)}, 500
+
+
 @app.route("/jira/get-issue", methods=["POST"])
 def jira_get_issue():
     key = (request.json or {}).get("issueKey", "")
@@ -1184,6 +1375,98 @@ def jira_add_comment():
     if "error" in data:
         return jsonify(data), code
     return jsonify({"status": "Comment added", "id": data.get("id"), "issueKey": issue_key})
+
+
+@app.route("/jira/assign-issue", methods=["POST"])
+def jira_assign_issue():
+    body = request.json or {}
+    issue_key = body.get("issueKey", "")
+    assignee = body.get("assignee", "")
+    data, code = _jira_put(f"/rest/api/2/issue/{issue_key}/assignee", {"name": assignee})
+    if "error" in data:
+        return jsonify(data), code
+    return jsonify({"status": "Assigned", "issueKey": issue_key, "assignee": assignee})
+
+
+@app.route("/jira/link-issues", methods=["POST"])
+def jira_link_issues():
+    body = request.json or {}
+    inward = body.get("inwardIssue", "")
+    outward = body.get("outwardIssue", "")
+    link_type = body.get("linkType", "Relates")
+    payload = {
+        "type": {"name": link_type},
+        "inwardIssue": {"key": inward},
+        "outwardIssue": {"key": outward},
+    }
+    data, code = _jira_post("/rest/api/2/issueLink", payload)
+    if "error" in data:
+        return jsonify(data), code
+    return jsonify({"linked": True, "inwardIssue": inward, "outwardIssue": outward, "linkType": link_type})
+
+
+@app.route("/jira/search-concept", methods=["POST"])
+def jira_search_concept():
+    body = request.json or {}
+    phrases = body.get("phrases") or []
+    field = (body.get("field") or "text").lower().strip()
+    max_res = int(body.get("maxResults", 20))
+    if not isinstance(phrases, list) or not phrases:
+        return jsonify({"error": "phrases must be a non-empty list"}), 400
+    if field not in {"text", "summary", "description", "comment"}:
+        return jsonify({"error": f"unsupported field '{field}'"}), 400
+
+    clean: List[str] = []
+    seen: set[str] = set()
+    for phrase in phrases:
+        p = str(phrase or "").strip()
+        if p and p.lower() not in seen:
+            seen.add(p.lower())
+            clean.append(p)
+    if not clean:
+        return jsonify({"error": "no usable phrases"}), 400
+
+    or_block = " OR ".join(f'{field} ~ "\\"{p}\\""' for p in clean)
+    payload = {
+        "jql": f"({or_block})",
+        "maxResults": max_res,
+        "fields": ["summary", "status", "priority", "assignee"],
+    }
+    data, code = _jira_post("/rest/api/2/search", payload)
+    if "error" in data:
+        return jsonify(data), code
+
+    issues = []
+    for i in data.get("issues", []):
+        f = i.get("fields", {})
+        issues.append({
+            "key": i.get("key"),
+            "summary": f.get("summary"),
+            "status": (f.get("status") or {}).get("name"),
+            "priority": (f.get("priority") or {}).get("name"),
+            "assignee": (f.get("assignee") or {}).get("displayName"),
+        })
+    return jsonify({"count": len(issues), "issues": issues, "phrases_used": clean, "effective_jql": payload["jql"]})
+
+
+@app.route("/jira/analyze-support-ticket", methods=["POST"])
+def jira_analyze_support_ticket():
+    body = request.json or {}
+    issue_key = str(body.get("issueKey") or "").strip()
+    since_hours = int(body.get("sinceHours", 24))
+    execute_api = bool(body.get("executeApi", False))
+    if not issue_key:
+        return jsonify({"error": "issueKey is required"}), 400
+    try:
+        result = run_support_ticket_analysis(
+            issue_key=issue_key,
+            since_hours=since_hours,
+            execute_api=execute_api,
+            output_path=None,
+        )
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ─── AI Chat (JiraCopilot) ───────────────────────────────────────────────────
