@@ -8,6 +8,7 @@ import re
 import requests
 from openai import OpenAI
 from dotenv import load_dotenv
+from ticket_modules.support_ticket_analyzer import run as run_support_ticket_analysis
 
 load_dotenv()
 
@@ -85,6 +86,8 @@ SYSTEM_PROMPT = (
     "Always include the user's original phrasing in the list. "
     "Use raw `search_issues` ONLY when the user explicitly gives you JQL, or asks for things "
     "like 'all open P1 tickets' that don't need phrase matching. "
+    "For end-to-end hotel-unavailable investigations (Jira context + New Relic checks + singleavail payload), "
+    "use the `analyze_support_ticket` tool. "
     "\n"
     "When you DO use raw `search_issues` with text/summary searches, the same rules apply: "
     "use the escaped-quote exact-phrase form `text ~ \"\\\"hotel unavailable\\\"\"`. "
@@ -338,9 +341,26 @@ def tool_search_concept(phrases: list, field: str = "text",
     }
 
 
+def tool_analyze_support_ticket(issueKey: str, sinceHours: int = 24, executeApi: bool = False):
+    """Run support-ticket analyzer for hotel unavailable investigations."""
+    if not _key_is_allowed(issueKey):
+        return {"error": f"Refused: {issueKey} is outside allowed projects {ALLOWED_PROJECTS}."}
+    try:
+        result = run_support_ticket_analysis(
+            issue_key=issueKey,
+            since_hours=int(sinceHours),
+            execute_api=bool(executeApi),
+            output_path=None,
+        )
+        return result
+    except Exception as e:
+        return {"error": str(e)}
+
+
 TOOL_FNS = {
     "search_issues":  tool_search_issues,
     "search_concept": tool_search_concept,
+    "analyze_support_ticket": tool_analyze_support_ticket,
     "get_issue":      tool_get_issue,
     "create_issue":   tool_create_issue,
     "add_comment":    tool_add_comment,
@@ -408,6 +428,26 @@ TOOLS_SCHEMA = [
                     "maxResults": {"type": "integer", "default": 20},
                 },
                 "required": ["phrases"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "analyze_support_ticket",
+            "description": (
+                "Run end-to-end support ticket analysis for 'hotel unavailable' issues: "
+                "extract context from Jira issue text, query New Relic logs, and build singleavail payload. "
+                "Optionally execute EC2 singleavail call when executeApi=true."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "issueKey":   {"type": "string", "description": "Jira issue key e.g. CRSUP-4421"},
+                    "sinceHours": {"type": "integer", "default": 24, "description": "Lookback window in hours"},
+                    "executeApi": {"type": "boolean", "default": False, "description": "Whether to call EC2 singleavail endpoint"},
+                },
+                "required": ["issueKey"],
             },
         },
     },

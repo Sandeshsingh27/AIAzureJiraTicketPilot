@@ -130,6 +130,81 @@ Search for all open issues in CRSUP project and summarize them.
 
 Claude will automatically use the `search_jira_issues` MCP tool.
 
+### Three Dedicated MCP Servers (Jira -> New Relic -> EC2)
+
+You can run these as separate servers, one per investigation stage:
+
+1. `jira-ticket-context-mcp-server.js` - extract `museId`/`hrCode`/`hKey`/dates from Jira tickets
+2. `newrelic-log-check-mcp-server.js` - verify related New Relic logs and success status
+3. `singleavail-ec2-mcp-server.js` - build payload and call EC2 `singleavail` endpoint
+
+Run each server:
+
+```powershell
+npm run start:mcp:jira-context
+npm run start:mcp:newrelic
+npm run start:mcp:singleavail
+```
+
+Use `cline_mcp_config.multi.example.json` as a starting point for client config.
+
+### Support Ticket Analyzer (Jira + New Relic + EC2)
+
+Use this when a Jira ticket mentions "hotel unavailable" and you want to:
+- pull identifiers from Jira (`museId`, `hrCode`, `hKey`, dates),
+- validate related New Relic logs,
+- build a `singleavail` payload,
+- optionally call the EC2 endpoint.
+
+```powershell
+python .\support_ticket_analyzer.py --issue-key CRSUP-4421 --since-hours 24 --output analysis.json
+```
+
+To also call the EC2 endpoint:
+
+```powershell
+python .\support_ticket_analyzer.py --issue-key CRSUP-4421 --since-hours 24 --execute-api --output analysis.json
+```
+
+Required env vars:
+- `NEW_RELIC_API_KEY`
+- `NEW_RELIC_ACCOUNT_ID`
+
+New Relic endpoint options:
+- `NEW_RELIC_LOG_API_URL` (example: `https://log-api.eu.newrelic.com/log/v1`)
+- `NEW_RELIC_GRAPHQL_URL` (optional explicit override)
+- `NEW_RELIC_CA_BUNDLE` (optional PEM file path for corporate CA trust)
+- `NEW_RELIC_INSECURE` (optional `true/false`, test-only TLS bypass)
+
+If `NEW_RELIC_GRAPHQL_URL` is empty and `NEW_RELIC_LOG_API_URL` uses `log-api.<region>.newrelic.com`,
+the tool derives NerdGraph automatically as `https://api.<region>.newrelic.com/graphql`.
+
+If you hit `SSLCertVerificationError` in corporate environments:
+1. Export your corporate root/intermediate CA certificate as PEM.
+2. Set `NEW_RELIC_CA_BUNDLE` to that PEM file path.
+3. Re-run analyzer.
+4. Use `NEW_RELIC_INSECURE=true` only for temporary testing.
+
+Optional env vars:
+- `EC2_SINGLEAVAIL_URL`
+- `EC2_BEARER_TOKEN`
+
+### AI Chat Prompt Examples (UI)
+
+Use these prompts in the **AI Chat** tab of `ui_app.py`:
+
+Analyze only (no EC2 call):
+
+```text
+Analyze support ticket CRSUP-4421 for hotel unavailable. Check New Relic logs from last 24 hours and build the singleavail payload.
+```
+
+Analyze + execute EC2 call:
+
+```text
+Run end-to-end analysis for CRSUP-4421, include New Relic check, build payload, and execute the singleavail API call.
+```
+
 ## Routing Rules
 
 ### Rule #1: APAC Connects

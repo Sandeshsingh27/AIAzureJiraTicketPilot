@@ -365,6 +365,8 @@ HTML = """
             <li>"Show details of CRSUP-4421"</li>
             <li>"Find similar tickets to CRSUP-4421, create a parent ticket and link them all"</li>
             <li>"Add a comment to CRSUP-4421 saying 'Please check ASAP'"</li>
+            <li>"Analyze support ticket CRSUP-4421 for hotel unavailable. Check New Relic logs from last 24 hours and build the singleavail payload."</li>
+            <li>"Run end-to-end analysis for CRSUP-4421, include New Relic check, build payload, and execute the singleavail API call."</li>
           </ul>
         </div>
       </div>

@@ -5,6 +5,9 @@
   "main": "jira-mcp-server.js",
   "scripts": {
     "start:mcp": "node jira-mcp-server.js",
+    "start:mcp:jira-context": "node mcp_servers/jira-ticket-context-mcp-server.js",
+    "start:mcp:newrelic": "node mcp_servers/newrelic-log-check-mcp-server.js",
+    "start:mcp:singleavail": "node mcp_servers/singleavail-ec2-mcp-server.js",
     "test:mcp": "echo \"Testing MCP server\""
   },
   "keywords": [
@@ -17,7 +20,8 @@
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "axios": "^1.7.0"
+    "axios": "^1.7.0",
+    "zod": "^3.23.8"
   },
   "engines": {
     "node": ">=16.0.0"

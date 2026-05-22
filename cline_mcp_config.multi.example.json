@@ -1,0 +1,29 @@
+{
+  "mcpServers": {
+    "jiraTicketContext": {
+      "command": "node",
+      "args": ["C:\\Users\\ssi51\\Documents\\Project\\TicketOrchestrator\\mcp_servers\\jira-ticket-context-mcp-server.js"],
+      "env": {
+        "JIRA_HOST": "https://jira.hrs.io",
+        "JIRA_PAT": "${JIRA_PAT}"
+      }
+    },
+    "newRelicLogCheck": {
+      "command": "node",
+      "args": ["C:\\Users\\ssi51\\Documents\\Project\\TicketOrchestrator\\mcp_servers\\newrelic-log-check-mcp-server.js"],
+      "env": {
+        "NEW_RELIC_ACCOUNT_ID": "${NEW_RELIC_ACCOUNT_ID}",
+        "NEW_RELIC_API_KEY": "${NEW_RELIC_API_KEY}"
+      }
+    },
+    "singleAvailEc2": {
+      "command": "node",
+      "args": ["C:\\Users\\ssi51\\Documents\\Project\\TicketOrchestrator\\mcp_servers\\singleavail-ec2-mcp-server.js"],
+      "env": {
+        "EC2_SINGLEAVAIL_URL": "http://iut1-crsng-tester-backend.iec.hrs.cc/crsng/singleavail",
+        "EC2_BEARER_TOKEN": "${EC2_BEARER_TOKEN}"
+      }
+    }
+  }
+}
+
