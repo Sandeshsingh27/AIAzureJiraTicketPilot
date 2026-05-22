@@ -160,6 +160,130 @@ def _extract_rate_access_codes(text: str) -> List[str]:
     return seen
 
 
+def _extract_list_literal_from_blob(blob: str, key: str) -> Optional[str]:
+    """Extract a list-like value for a key from mixed JSON/free-text blobs."""
+    ek = re.escape(key)
+    patterns = [
+        # Key contains a quoted list-string, e.g. "companyKey": "[32485,16120]"
+        rf'"{ek}"\s*:\s*"((?:\\.|[^"\\])*)"',
+        # Key contains a JSON list, e.g. "rateAccessCodeIn": ["FAT","IVE"]
+        rf'"{ek}"\s*:\s*(\[[^\]]*\])',
+        # Non-JSON key/value form, e.g. companyKey=[32485,16120]
+        rf'\b{ek}\b\s*[:=]\s*(\[[^\]]*\])',
+    ]
+    for pattern in patterns:
+        raw = _extract_first(pattern, blob, flags=re.IGNORECASE)
+        if raw:
+            return _unescape_text(raw)
+    return None
+
+
+def _parse_listish(value: Any) -> List[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+
+    text = str(value).strip()
+    if not text:
+        return []
+
+    parsed = _parse_json_maybe(text)
+    if isinstance(parsed, list):
+        return parsed
+    if isinstance(parsed, str):
+        nested = _parse_json_maybe(parsed)
+        if isinstance(nested, list):
+            return nested
+
+    stripped = _strip_outer_braces(text)
+    if stripped and "," in stripped:
+        return [item.strip() for item in stripped.split(",") if item.strip()]
+    return [stripped] if stripped else []
+
+
+def _parse_string_list(value: Any) -> List[str]:
+    items = _parse_listish(value)
+    result: List[str] = []
+    for item in items:
+        text = _strip_outer_braces(item)
+        if text:
+            result.append(str(text).upper())
+    # keep order, remove duplicates
+    seen: List[str] = []
+    for item in result:
+        if item not in seen:
+            seen.append(item)
+    return seen
+
+
+def _parse_int_list(value: Any) -> List[int]:
+    items = _parse_listish(value)
+    result: List[int] = []
+    for item in items:
+        text = _strip_outer_braces(item)
+        if text and str(text).isdigit():
+            result.append(int(str(text)))
+    # keep order, remove duplicates
+    seen: List[int] = []
+    for item in result:
+        if item not in seen:
+            seen.append(item)
+    return seen
+
+
+def _normalize_compare_token(value: Any) -> Optional[str]:
+    token = _strip_outer_braces(value)
+    if token is None:
+        return None
+    normalized = str(token).strip().upper()
+    return normalized or None
+
+
+def _collect_compare_tokens(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, dict):
+        tokens: List[str] = []
+        for nested in value.values():
+            tokens.extend(_collect_compare_tokens(nested))
+        return tokens
+    if isinstance(value, list):
+        tokens: List[str] = []
+        for nested in value:
+            tokens.extend(_collect_compare_tokens(nested))
+        return tokens
+    if isinstance(value, str):
+        parsed = _parse_json_maybe(value)
+        if parsed is not None and parsed is not value:
+            return _collect_compare_tokens(parsed)
+        text = value.strip()
+        if not text:
+            return []
+        # Support list-like scalar strings such as "A;B;C" or "A,B,C".
+        if ";" in text or "," in text:
+            tokens: List[str] = []
+            for part in re.split(r"[;,]", text):
+                normalized = _normalize_compare_token(part)
+                if normalized:
+                    tokens.append(normalized)
+            return tokens
+    normalized = _normalize_compare_token(value)
+    return [normalized] if normalized else []
+
+
+def _is_hr_code_ci_whitelisted(hr_code: Optional[Any], whitelist_value: Any) -> bool:
+    hr_tokens = _collect_compare_tokens(hr_code)
+    if not hr_tokens:
+        return False
+    whitelist_tokens = set(_collect_compare_tokens(whitelist_value))
+    if not whitelist_tokens:
+        return False
+    return any(token in whitelist_tokens for token in hr_tokens)
+
+
 def _parse_json_maybe(value: Any) -> Any:
     if not isinstance(value, str):
         return value
@@ -210,6 +334,7 @@ def _extract_log_fields(log: Dict[str, Any]) -> Dict[str, Any]:
         "arrivalDate",
         "departureDate",
         "rateAccessCodes",
+        "hotelIdsForCIWhiteList",
     }
     found: Dict[str, Any] = {k: None for k in field_keys}
 
@@ -335,6 +460,12 @@ def parse_ticket_indicators(issue: Dict[str, Any]) -> Dict[str, Any]:
 
     blob = "\n".join([summary, description] + comments)
 
+    ticket_rate_access_codes = _parse_string_list(
+        _extract_list_literal_from_blob(blob, "rateAccessCodeIn")
+        or _extract_list_literal_from_blob(blob, "rateAccessCodes")
+    )
+    ticket_company_ids = _parse_int_list(_extract_list_literal_from_blob(blob, "companyKey"))
+
     indicators = {
         "issueKey": issue.get("key"),
         "summary": summary,
@@ -350,7 +481,8 @@ def parse_ticket_indicators(issue: Dict[str, Any]) -> Dict[str, Any]:
         "arrivalDate": _extract_key_from_blob(blob, "arrivalDate") or _extract_first(r"arrival\s*date\s*[:=]\s*([0-9]{4}[-/][0-9]{2}[-/][0-9]{2})", blob),
         "departureDate": _extract_key_from_blob(blob, "departureDate") or _extract_first(r"departure\s*date\s*[:=]\s*([0-9]{4}[-/][0-9]{2}[-/][0-9]{2})", blob),
         "messageType": _extract_key_from_blob(blob, "message") or _extract_first(r"\bmessage\b\s*[:=]\s*([A-Za-z0-9_-]+)", blob),
-        "rateAccessCodes": _extract_rate_access_codes(blob),
+        "rateAccessCodes": ticket_rate_access_codes or _extract_rate_access_codes(blob),
+        "companyIds": ticket_company_ids,
         "rawText": blob,
     }
 
@@ -656,6 +788,7 @@ def summarize_new_relic(logs: List[Dict[str, Any]]) -> Dict[str, Any]:
         "arrivalDate": _first_non_empty(item.get("arrivalDate") for item in extracted),
         "departureDate": _first_non_empty(item.get("departureDate") for item in extracted),
         "rateAccessCodes": _first_non_empty(item.get("rateAccessCodes") for item in extracted),
+        "hotelIdsForCIWhiteList": _first_non_empty(item.get("hotelIdsForCIWhiteList") for item in extracted),
     }
 
     if not derived.get("fKey") and derived.get("companyKey"):
@@ -710,14 +843,20 @@ def build_singleavail_payload(indicators: Dict[str, Any], nr_summary: Dict[str, 
         ["HRQ", "SIE"],
     ])
 
-    company_id_num = int(customer_key) if customer_key.isdigit() else 29908
+    ci_whitelisted = _is_hr_code_ci_whitelisted(hr_code=hr_code, whitelist_value=derived.get("hotelIdsForCIWhiteList"))
+
+    indicator_company_ids = indicators.get("companyIds") if isinstance(indicators.get("companyIds"), list) else []
+    company_ids = [int(x) for x in indicator_company_ids if str(x).isdigit()]
+    if not company_ids:
+        company_ids = [int(customer_key)] if customer_key.isdigit() else [29908]
+
     hotels = [{
         "hrCode": hr_code,
         "hKey": h_key,
         "priority": None,
         "multisource": False,
         "chainId": chain_id,
-        "ciWhitelisted": False,
+        "ciWhitelisted": ci_whitelisted,
     }]
 
     return {
@@ -731,7 +870,7 @@ def build_singleavail_payload(indicators: Dict[str, Any], nr_summary: Dict[str, 
         "adults": 1,
         "children": 0,
         "rateAccessCodes": rate_access_codes,
-        "companyIds": [company_id_num],
+        "companyIds": company_ids,
         "corporateDiscountFlag": False,
         "bookingSource": booking_source,
         "customerKey": customer_key,
