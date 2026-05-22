@@ -86,7 +86,7 @@ SYSTEM_PROMPT = (
     "Always include the user's original phrasing in the list. "
     "Use raw `search_issues` ONLY when the user explicitly gives you JQL, or asks for things "
     "like 'all open P1 tickets' that don't need phrase matching. "
-    "For end-to-end hotel-unavailable investigations (Jira context + New Relic checks + singleavail payload), "
+    "For end-to-end hotel-unavailable or hotel-not-bookable investigations (Jira context + New Relic checks + singleavail payload), "
     "use the `analyze_support_ticket` tool. "
     "\n"
     "When you DO use raw `search_issues` with text/summary searches, the same rules apply: "
@@ -342,7 +342,7 @@ def tool_search_concept(phrases: list, field: str = "text",
 
 
 def tool_analyze_support_ticket(issueKey: str, sinceHours: int = 24, executeApi: bool = False):
-    """Run support-ticket analyzer for hotel unavailable investigations."""
+    """Run support-ticket analyzer for hotel unavailable/not-bookable investigations."""
     if not _key_is_allowed(issueKey):
         return {"error": f"Refused: {issueKey} is outside allowed projects {ALLOWED_PROJECTS}."}
     try:
@@ -437,6 +437,7 @@ TOOLS_SCHEMA = [
             "name": "analyze_support_ticket",
             "description": (
                 "Run end-to-end support ticket analysis for 'hotel unavailable' issues: "
+                "(also applicable to 'hotel not bookable' issues) "
                 "extract context from Jira issue text, query New Relic logs, and build singleavail payload. "
                 "Optionally execute EC2 singleavail call when executeApi=true."
             ),

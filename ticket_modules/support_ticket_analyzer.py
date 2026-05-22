@@ -25,6 +25,14 @@ from dotenv import load_dotenv
 DEFAULT_SINGLEAVAIL_URL = "http://iut1-crsng-tester-backend.iec.hrs.cc/crsng/singleavail"
 DEFAULT_NEW_RELIC_GRAPHQL_URL = "https://api.newrelic.com/graphql"
 MAX_JIRA_COMMENT_CHARS = 25000
+DEFAULT_AVAILABILITY_KEYWORDS_FILE = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "ticket_analysis_keywords.json")
+)
+DEFAULT_AVAILABILITY_KEYWORDS = [
+    "hotel not available",
+    "hotel unavailable",
+    "hotel not bookable",
+]
 
 
 def _adf_to_text(node: Any) -> str:
@@ -158,6 +166,38 @@ def _extract_rate_access_codes(text: str) -> List[str]:
         if code not in seen:
             seen.append(code)
     return seen
+
+
+def _load_availability_keywords() -> List[str]:
+    file_path = os.getenv("TICKET_ANALYSIS_KEYWORDS_FILE", "").strip() or DEFAULT_AVAILABILITY_KEYWORDS_FILE
+    try:
+        with open(file_path, "r", encoding="utf-8") as fp:
+            payload = json.load(fp)
+    except Exception:
+        payload = {}
+
+    raw_keywords = payload.get("availabilityKeywords") if isinstance(payload, dict) else None
+    if not isinstance(raw_keywords, list):
+        raw_keywords = DEFAULT_AVAILABILITY_KEYWORDS
+
+    keywords: List[str] = []
+    for item in raw_keywords:
+        text = str(item or "").strip().lower()
+        if text and text not in keywords:
+            keywords.append(text)
+    return keywords or list(DEFAULT_AVAILABILITY_KEYWORDS)
+
+
+def _extract_availability_keyword_hits(text: str, keywords: List[str]) -> List[str]:
+    if not text:
+        return []
+    normalized_text = re.sub(r"\s+", " ", text.lower())
+    hits: List[str] = []
+    for keyword in keywords:
+        phrase = re.sub(r"\s+", " ", str(keyword or "").strip().lower())
+        if phrase and phrase in normalized_text and phrase not in hits:
+            hits.append(phrase)
+    return hits
 
 
 def _extract_list_literal_from_blob(blob: str, key: str) -> Optional[str]:
@@ -459,6 +499,8 @@ def parse_ticket_indicators(issue: Dict[str, Any]) -> Dict[str, Any]:
             comments.append(_adf_to_text(c.get("body") if isinstance(c, dict) else c))
 
     blob = "\n".join([summary, description] + comments)
+    availability_keywords = _load_availability_keywords()
+    availability_keyword_hits = _extract_availability_keyword_hits(blob, availability_keywords)
 
     ticket_rate_access_codes = _parse_string_list(
         _extract_list_literal_from_blob(blob, "rateAccessCodeIn")
@@ -483,6 +525,9 @@ def parse_ticket_indicators(issue: Dict[str, Any]) -> Dict[str, Any]:
         "messageType": _extract_key_from_blob(blob, "message") or _extract_first(r"\bmessage\b\s*[:=]\s*([A-Za-z0-9_-]+)", blob),
         "rateAccessCodes": ticket_rate_access_codes or _extract_rate_access_codes(blob),
         "companyIds": ticket_company_ids,
+        "availabilityKeywords": availability_keywords,
+        "ticketAvailabilityKeywordHits": availability_keyword_hits,
+        "ticketHasAvailabilityIndicator": bool(availability_keyword_hits),
         "rawText": blob,
     }
 
@@ -565,7 +610,10 @@ def _build_nrql_filters(indicators: Dict[str, Any]) -> List[str]:
     if muse_id:
         where_parts.append(f"museId IN ('{_nrql_escape(muse_id)}')")
 
-    where_parts.append("message IN ('SINGLEAVAIL')")
+    if indicators.get("ticketHasAvailabilityIndicator"):
+        where_parts.append("(message IN ('SINGLEAVAIL') OR message LIKE '%NOT BOOKABLE%' OR message LIKE '%HOTEL NOT BOOKABLE%')")
+    else:
+        where_parts.append("message IN ('SINGLEAVAIL')")
 
     h_key = str(indicators.get("hKey") or "").strip()
     if h_key:
