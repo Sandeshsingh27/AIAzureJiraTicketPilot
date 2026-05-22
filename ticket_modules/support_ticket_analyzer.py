@@ -1242,7 +1242,14 @@ def _singleavail_has_open_status(value: Any) -> bool:
     return False
 
 
-def run(issue_key: str, since_hours: int, execute_api: bool, output_path: Optional[str]) -> Dict[str, Any]:
+def run(
+    issue_key: str,
+    since_hours: int,
+    execute_api: bool,
+    output_path: Optional[str],
+    comment_jira: bool = True,
+    preview_jira_comment: bool = True,
+) -> Dict[str, Any]:
     load_dotenv()
 
     jira_url = os.getenv("JIRA_URL", "").strip()
@@ -1318,30 +1325,49 @@ def run(issue_key: str, since_hours: int, execute_api: bool, output_path: Option
             "reason": None,
         }
         if api_result.get("ok") and _singleavail_has_open_status(api_result.get("body")):
-            comments = build_open_status_jira_comments(payload=payload, api_result=api_result)
-            if len(comments) == 1 and jira_comment_exists(issue, comments[0]):
-                jira_comment_result = {
-                    "attempted": False,
-                    "posted": False,
-                    "reason": "duplicate OPEN-status EC2 response comment already exists",
-                    "comment": comments[0],
-                }
-            else:
-                try:
-                    jira_comment_result = post_jira_comments(
-                        issue_key=issue_key,
-                        jira_url=jira_url,
-                        jira_pat=jira_pat,
-                        issue=issue,
-                        comments=comments,
-                    )
-                except Exception as exc:
+            if not comment_jira:
+                if preview_jira_comment:
+                    comments = build_open_status_jira_comments(payload=payload, api_result=api_result)
                     jira_comment_result = {
-                        "attempted": True,
+                        "attempted": False,
                         "posted": False,
-                        "error": str(exc),
+                        "dryRun": True,
+                        "reason": "Jira comment posting disabled for this run",
+                        "commentPlanCount": len(comments),
                         "comments": comments,
                     }
+                else:
+                    jira_comment_result = {
+                        "attempted": False,
+                        "posted": False,
+                        "dryRun": True,
+                        "reason": "Jira comment flow disabled for this run",
+                    }
+            else:
+                comments = build_open_status_jira_comments(payload=payload, api_result=api_result)
+                if len(comments) == 1 and jira_comment_exists(issue, comments[0]):
+                    jira_comment_result = {
+                        "attempted": False,
+                        "posted": False,
+                        "reason": "duplicate OPEN-status EC2 response comment already exists",
+                        "comment": comments[0],
+                    }
+                else:
+                    try:
+                        jira_comment_result = post_jira_comments(
+                            issue_key=issue_key,
+                            jira_url=jira_url,
+                            jira_pat=jira_pat,
+                            issue=issue,
+                            comments=comments,
+                        )
+                    except Exception as exc:
+                        jira_comment_result = {
+                            "attempted": True,
+                            "posted": False,
+                            "error": str(exc),
+                            "comments": comments,
+                        }
         elif execute_api:
             jira_comment_result = {
                 "attempted": False,

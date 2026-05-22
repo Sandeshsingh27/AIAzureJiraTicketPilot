@@ -42,6 +42,25 @@ JIRA_HEADERS = {
     "Accept":        "application/json",
 }
 
+KEYWORDS_FILE = Path(__file__).resolve().parents[2] / "ticket_analysis_keywords.json"
+
+
+def _load_availability_keywords_for_ui() -> list[str]:
+    default_keywords = ["hotel not available", "hotel unavailable", "hotel not bookable"]
+    try:
+        payload = json.loads(KEYWORDS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return default_keywords
+    raw = payload.get("availabilityKeywords") if isinstance(payload, dict) else None
+    if not isinstance(raw, list):
+        return default_keywords
+    out: list[str] = []
+    for item in raw:
+        kw = str(item or "").strip()
+        if kw and kw.lower() not in [x.lower() for x in out]:
+            out.append(kw)
+    return out or default_keywords
+
 
 def _resolve_orchestrator_script() -> str:
     """Find the orchestrator entry script regardless of current module location."""
@@ -264,6 +283,7 @@ HTML = """
         <option value="assign">👤 Assign Issue</option>
         <option value="link">🔗 Link Issues</option>
         <option value="analyze">🧪 Analyze Support Ticket</option>
+        <option value="analyze-bulk">📚 Bulk Analyze (CRSUP Dry Run)</option>
       </select>
     </div>
 
@@ -411,6 +431,43 @@ HTML = """
         <input type="checkbox" id="an-exec" /> Execute API
       </div>
       <button class="btn btn-blue" onclick="analyzeSupportTicket()" style="padding:11px 28px; font-size:.95rem;">Analyze</button>
+    </div>
+
+    <!-- Bulk Analyze inputs (CRSUP dry-run only) -->
+    <div class="jira-inputs" id="inputs-analyze-bulk" style="display:none; flex:2; gap:12px; align-items:flex-end; flex-wrap:wrap;">
+      <div style="display:flex; flex-direction:column; width:130px;">
+        <label style="font-size:.82rem; color:#94a3b8; margin-bottom:6px;">Project</label>
+        <input type="text" value="CRSUP" disabled
+               style="background:#111827; border:1px solid #334155; color:#94a3b8; padding:11px 14px; border-radius:8px; font-size:.95rem;"/>
+      </div>
+      <div style="display:flex; flex-direction:column; width:120px;">
+        <label style="font-size:.82rem; color:#94a3b8; margin-bottom:6px;">Since (h)</label>
+        <input type="number" id="ab-hours" value="24" min="1" max="240"
+               style="background:#0f172a; border:1px solid #334155; color:#e2e8f0; padding:11px 14px; border-radius:8px; font-size:.95rem;"/>
+      </div>
+      <div style="display:flex; flex-direction:column; width:140px;">
+        <label style="font-size:.82rem; color:#94a3b8; margin-bottom:6px;">Sample Size</label>
+        <input type="number" id="ab-sample" value="3" min="1" max="10"
+               style="background:#0f172a; border:1px solid #334155; color:#e2e8f0; padding:11px 14px; border-radius:8px; font-size:.95rem;"/>
+      </div>
+      <div style="display:flex; flex-direction:column; flex:1; min-width:320px;">
+        <label style="font-size:.82rem; color:#94a3b8; margin-bottom:6px;">Extra Keywords (optional, comma-separated)</label>
+        <input type="text" id="ab-extra-keywords" placeholder="e.g. hotel closed, property suspended"
+               style="background:#0f172a; border:1px solid #334155; color:#e2e8f0; padding:11px 14px; border-radius:8px; font-size:.95rem;"/>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px; color:#cbd5e1; font-size:.9rem;">
+        <input type="checkbox" id="ab-exec-api" /> Execute API
+      </div>
+      <div style="display:flex; align-items:center; gap:8px; color:#cbd5e1; font-size:.9rem;">
+        <input type="checkbox" id="ab-jira-comment" /> Enable Jira Comment Posting (CRSUP only)
+      </div>
+      <div style="display:flex; align-items:center; color:#facc15; font-size:.82rem;">
+        Sample Size = number of latest matching CRSUP tickets to analyze. Safe defaults keep API and commenting off.
+      </div>
+      <div style="display:flex; align-items:center; color:#94a3b8; font-size:.8rem; width:100%;">
+        Both off by default for safe production testing.
+      </div>
+      <button class="btn btn-blue" onclick="analyzeBulkDryRun()" style="padding:11px 28px; font-size:.95rem;">Run Bulk Dry Run</button>
     </div>
   </div>
 
@@ -1070,6 +1127,22 @@ async function analyzeSupportTicket() {
   });
   showResult('jira-result', await r.json());
 }
+
+// ── Bulk Analyze (CRSUP dry-run) ──────────────────────────────
+async function analyzeBulkDryRun() {
+  const sinceHours = parseInt(document.getElementById('ab-hours').value, 10) || 24;
+  const sampleSize = parseInt(document.getElementById('ab-sample').value, 10) || 3;
+  const extraKeywordsRaw = document.getElementById('ab-extra-keywords').value.trim();
+  const extraKeywords = extraKeywordsRaw ? extraKeywordsRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
+  const executeApi = document.getElementById('ab-exec-api').checked;
+  const enableJiraComment = document.getElementById('ab-jira-comment').checked;
+  showResult('jira-result', 'Running CRSUP bulk dry-run analysis...');
+  const r = await fetch('/jira/analyze-bulk-dry-run', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({project: 'CRSUP', sinceHours, sampleSize, extraKeywords, executeApi, enableJiraComment})
+  });
+  showResult('jira-result', await r.json());
+}
 </script>
 </body>
 </html>
@@ -1467,6 +1540,110 @@ def jira_analyze_support_ticket():
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/jira/analyze-bulk-dry-run", methods=["POST"])
+def jira_analyze_bulk_dry_run():
+    body = request.json or {}
+    project = str(body.get("project") or "CRSUP").strip().upper()
+    since_hours = int(body.get("sinceHours", 24))
+    sample_size = int(body.get("sampleSize", 3))
+    extra_keywords_raw = body.get("extraKeywords") or []
+    execute_api = bool(body.get("executeApi", False))
+    enable_jira_comment = bool(body.get("enableJiraComment", False))
+
+    # Safety guard: testing-only scope as requested.
+    if project != "CRSUP":
+        return jsonify({"error": "Only CRSUP is allowed for bulk dry run."}), 400
+
+    sample_size = max(1, min(sample_size, 10))
+    keywords = _load_availability_keywords_for_ui()
+    extra_keywords: list[str] = []
+    if isinstance(extra_keywords_raw, list):
+        for item in extra_keywords_raw:
+            keyword = str(item or "").strip()
+            if keyword and keyword.lower() not in [k.lower() for k in extra_keywords]:
+                extra_keywords.append(keyword)
+    combined_keywords: list[str] = []
+    for keyword in keywords + extra_keywords:
+        if keyword.lower() not in [k.lower() for k in combined_keywords]:
+            combined_keywords.append(keyword)
+
+    if not combined_keywords:
+        return jsonify({"error": "No keywords available for bulk analysis."}), 400
+
+    phrase_clause = " OR ".join([f'text ~ "\\"{kw}\\""' for kw in combined_keywords])
+    jql = (
+        f'project = "CRSUP" AND statusCategory != Done AND ({phrase_clause}) '
+        "ORDER BY updated DESC"
+    )
+
+    search_payload = {
+        "jql": jql,
+        "maxResults": sample_size,
+        "fields": ["summary", "status"],
+    }
+    data, code = _jira_post("/rest/api/2/search", search_payload)
+    if "error" in data:
+        return jsonify(data), code
+
+    issues = data.get("issues", []) or []
+    analyzed = []
+    for item in issues:
+        key = item.get("key")
+        summary = (item.get("fields") or {}).get("summary")
+        try:
+            result = run_support_ticket_analysis(
+                issue_key=key,
+                since_hours=since_hours,
+                execute_api=execute_api,
+                output_path=None,
+                comment_jira=enable_jira_comment,
+                preview_jira_comment=True,
+            )
+            analyzed.append({
+                "issueKey": key,
+                "summary": summary,
+                "analyzed": True,
+                "dryRun": True,
+                "executeApi": execute_api,
+                "jiraCommentPreviewEnabled": True,
+                "jiraCommentPostingEnabled": enable_jira_comment,
+                "wouldPostComment": bool(execute_api and enable_jira_comment),
+                "jiraComment": result.get("jiraComment"),
+                "payloadPreview": result.get("singleAvailPayload"),
+                "singleAvailExecution": result.get("singleAvailExecution"),
+                "singleAvailResponseStatus": (result.get("singleAvailResponse") or {}).get("statusCode"),
+                "wouldCommentPreview": ((result.get("jiraComment") or {}).get("comments") or [None])[0],
+                "availabilityHits": (result.get("indicators") or {}).get("ticketAvailabilityKeywordHits"),
+                "newRelicSampleCount": (result.get("newRelic") or {}).get("sampleCount"),
+            })
+        except Exception as exc:
+            analyzed.append({
+                "issueKey": key,
+                "summary": summary,
+                "analyzed": False,
+                "dryRun": True,
+                "error": str(exc),
+            })
+
+    return jsonify({
+        "mode": "bulk-keyword-analysis-dry-run",
+        "project": "CRSUP",
+        "dryRun": True,
+        "sampleSizeRequested": sample_size,
+        "sampleSizeMeaning": "Number of latest matching CRSUP tickets analyzed in this run.",
+        "executeApi": execute_api,
+        "jiraCommentPreviewEnabled": True,
+        "jiraCommentPostingEnabled": enable_jira_comment,
+        "keywordsFromConfig": keywords,
+        "keywordsFromInput": extra_keywords,
+        "keywordsUsed": combined_keywords,
+        "effectiveJql": jql,
+        "ticketsMatched": len(issues),
+        "results": analyzed,
+        "note": "Preview is always generated when available. Jira posting only happens if 'Enable Jira Comment Posting (CRSUP only)' is checked.",
+    })
 
 
 # ─── AI Chat (JiraCopilot) ───────────────────────────────────────────────────
