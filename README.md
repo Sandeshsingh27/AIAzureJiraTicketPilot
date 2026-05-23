@@ -79,6 +79,13 @@ pip install -r requirements.txt
 npm install
 ```
 
+### 4. React UI Setup (optional, new flexible UI)
+
+```bash
+cd frontend
+npm install
+```
+
 ## Usage
 
 ### Run Ticket Orchestrator
@@ -98,6 +105,31 @@ python .\ticket_orchestrator.py
 # Set in .env: DRY_RUN=false
 python .\ticket_orchestrator.py
 ```
+
+### Run Web UI (Flask backend)
+
+```powershell
+python .\ui_app.py
+```
+
+### Run React UI (ChatGPT-style sidebar workspace)
+
+```powershell
+npm run ui:dev
+```
+
+Or directly:
+
+```powershell
+cd .\frontend
+npm run dev
+```
+
+React UI tabs:
+
+- `MCP Tools`
+- `Ticket Orchestrator`
+- `How To Use`
 
 ### MCP Server Usage (Claude/Cline)
 

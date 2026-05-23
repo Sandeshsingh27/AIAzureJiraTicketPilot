@@ -1,0 +1,582 @@
+import { useEffect, useRef, useState } from "react";
+
+// ── Prompt library ────────────────────────────────────────────
+const PROMPT_LIBRARY = {
+  "Search & Discovery": [
+    "Find all open CRSUP tickets about Hotel Unavailable",
+    "Show details of CRSUP-4421",
+    "Find similar tickets to CRSUP-4421, create a parent ticket and link them all",
+  ],
+  "Single Ticket Analysis": [
+    "Analyze support ticket CRSUP-4421 for hotel unavailable. Check New Relic logs from last 24 hours and build the singleavail payload.",
+    "Run end-to-end analysis for CRSUP-4421, include New Relic check, build payload, and execute the singleavail API call.",
+  ],
+  "Bulk Dry Run (CRSUP)": [
+    "Run bulk dry-run analysis for CRSUP using sample size 3, last 24 hours, executeApi false, enableJiraComment false.",
+    "/bulk-dry-run sinceHours=24 sampleSize=5 executeApi=true enableJiraComment=false extra keywords: hotel closed, property suspended",
+  ],
+};
+
+const QUICK_PILLS = [
+  "Find open CRSUP hotel unavailable tickets",
+  "Analyze CRSUP-4421 for hotel unavailable",
+  "Bulk dry-run for CRSUP, sample size 3",
+  "Show details of CRSUP-4421",
+];
+
+// ── API helper ────────────────────────────────────────────────
+async function postJson(path, body) {
+  const r = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data?.error || `HTTP ${r.status}`);
+  return data;
+}
+
+// ── Sidebar icons ─────────────────────────────────────────────
+const NAV = [
+  { id: "chat",        icon: "💬", label: "AI Chat" },
+  { id: "mcp",         icon: "🔧", label: "MCP Tools" },
+  { id: "orchestrator",icon: "🤖", label: "Ticket Orchestrator" },
+  { id: "howto",       icon: "📘", label: "How To Use" },
+];
+
+function Sidebar({ active, onChange }) {
+  return (
+    <aside className="sidebar">
+      <div className="sidebar-logo">T</div>
+      <div className="sidebar-divider" />
+      {NAV.map((n) => (
+        <button
+          key={n.id}
+          className={`nav-item ${active === n.id ? "active" : ""}`}
+          onClick={() => onChange(n.id)}
+          title=""
+        >
+          {n.icon}
+          <span className="tooltip">{n.label}</span>
+        </button>
+      ))}
+    </aside>
+  );
+}
+
+// ── Prompt popup ──────────────────────────────────────────────
+function PromptPopup({ onSelect, onClose }) {
+  return (
+    <div className="prompt-popup">
+      <div className="prompt-popup-head">
+        💡 Example prompts
+        <button onClick={onClose}>✕</button>
+      </div>
+      {Object.entries(PROMPT_LIBRARY).map(([cat, items]) => (
+        <div key={cat}>
+          <div className="prompt-category">{cat}</div>
+          {items.map((p) => (
+            <div
+              key={p}
+              className="prompt-item"
+              onClick={() => { onSelect(p); onClose(); }}
+            >
+              {p}
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Chat view ─────────────────────────────────────────────────
+function ChatView() {
+  const [messages, setMessages] = useState([]);
+  const [history, setHistory] = useState([]);
+  const [input, setInput] = useState("");
+  const [sending, setSending] = useState(false);
+  const [trace, setTrace] = useState([]);
+  const [showTrace, setShowTrace] = useState(false);
+  const [showPrompts, setShowPrompts] = useState(false);
+  const bottomRef = useRef(null);
+  const textareaRef = useRef(null);
+  const promptWrapRef = useRef(null);
+
+  // Close prompt popup when clicking outside
+  useEffect(() => {
+    if (!showPrompts) return;
+    const handler = (e) => {
+      if (promptWrapRef.current && !promptWrapRef.current.contains(e.target)) {
+        setShowPrompts(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [showPrompts]);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, sending]);
+
+  const send = async (text) => {
+    const msg = (text ?? input).trim();
+    if (!msg || sending) return;
+    setSending(true);
+    setMessages((p) => [...p, { role: "user", text: msg }]);
+    setInput("");
+    setShowPrompts(false);
+    try {
+      const data = await postJson("/chat", { message: msg, history });
+      setMessages((p) => [...p, { role: "bot", text: data.reply || "(no response)" }]);
+      setHistory(data.history || history);
+      setTrace(data.tool_trace || []);
+      if ((data.tool_trace || []).length) setShowTrace(true);
+    } catch (err) {
+      setMessages((p) => [...p, { role: "bot", text: `❌ ${err.message}` }]);
+    } finally {
+      setSending(false);
+      setTimeout(() => textareaRef.current?.focus(), 50);
+    }
+  };
+
+  const handleKey = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+  };
+
+  return (
+    <div className="chat-view">
+      {/* Header */}
+      <div className="chat-header">
+        <span style={{ fontSize: "1.1rem" }}>💬</span>
+        <h2>JiraCopilot</h2>
+        <span className="header-badge">Jira + New Relic + Single Avail</span>
+        <div style={{ flex: 1 }} />
+        <button
+          className="btn secondary"
+          style={{ fontSize: "0.78rem", padding: "5px 10px" }}
+          onClick={() => { setMessages([]); setHistory([]); setTrace([]); setShowTrace(false); }}
+        >
+          🗑 New Chat
+        </button>
+      </div>
+
+      {/* Messages */}
+      <div className="chat-messages">
+        {messages.length === 0 ? (
+          <div className="chat-welcome">
+            <div className="chat-welcome-logo">💬</div>
+            <h3>How can I help you today?</h3>
+            <p>Search Jira tickets, run hotel availability analysis, bulk dry-run CRSUP checks, and more.</p>
+            <div className="quick-pills">
+              {QUICK_PILLS.map((p) => (
+                <button key={p} className="quick-pill" onClick={() => send(p)}>{p}</button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <>
+            {messages.map((m, i) => (
+              <div key={i} className={`msg-row ${m.role}`}>
+                <div className={`bubble ${m.role}`}>{m.text}</div>
+              </div>
+            ))}
+            {sending && (
+              <div className="msg-row bot">
+                <div className="bubble bot thinking">JiraCopilot is thinking…</div>
+              </div>
+            )}
+          </>
+        )}
+        <div ref={bottomRef} />
+      </div>
+
+      {/* Tool trace */}
+      {trace.length > 0 && (
+        <>
+          <div className="trace-toggle" onClick={() => setShowTrace((v) => !v)}>
+            {showTrace ? "▲ Hide" : "▼ Show"} tools used ({trace.length})
+          </div>
+          {showTrace && (
+            <pre className="trace-box">
+              {trace.map((t, i) =>
+                `→ ${t.tool}(${JSON.stringify(t.args)})\n   ${JSON.stringify(t.result).slice(0, 400)}\n`
+              ).join("\n")}
+            </pre>
+          )}
+        </>
+      )}
+
+      {/* Input bar */}
+      <div className="chat-input-bar">
+        <div className="chat-input-wrap">
+          {/* Prompt hint icon */}
+          <div className="prompt-hint-wrap" ref={promptWrapRef}>
+            <button
+              className={`prompt-hint-btn ${showPrompts ? "open" : ""}`}
+              onClick={() => setShowPrompts((v) => !v)}
+              title="Example prompts"
+            >
+              💡
+            </button>
+            {showPrompts && (
+              <PromptPopup
+                onSelect={(p) => { setInput(p); textareaRef.current?.focus(); }}
+                onClose={() => setShowPrompts(false)}
+              />
+            )}
+          </div>
+
+          <textarea
+            ref={textareaRef}
+            rows={1}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKey}
+            placeholder="Ask anything about your Jira tickets…"
+          />
+          <button className="send-btn" onClick={() => send()} disabled={sending || !input.trim()}>
+            ➤
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── MCP Tools view ────────────────────────────────────────────
+function MCPToolsView() {
+  const [tool, setTool] = useState("get");
+  const [result, setResult] = useState("Result will appear here after running a tool.");
+
+  const [issueKey, setIssueKey] = useState("");
+  const [jql, setJql] = useState("project=CRSUP AND status=Open");
+  const [maxResults, setMaxResults] = useState(10);
+  const [project, setProject] = useState("CRSUP");
+  const [issueType, setIssueType] = useState("Task");
+  const [summary, setSummary] = useState("");
+  const [description, setDescription] = useState("");
+  const [comment, setComment] = useState("");
+  const [assignee, setAssignee] = useState("");
+  const [inward, setInward] = useState("");
+  const [outward, setOutward] = useState("");
+  const [linkType, setLinkType] = useState("Relates");
+  const [anHours, setAnHours] = useState(24);
+  const [anExec, setAnExec] = useState(false);
+  const [running, setRunning] = useState(false);
+
+  const runTool = async () => {
+    setRunning(true);
+    setResult("Running…");
+    try {
+      let data;
+      if (tool === "get")      data = await postJson("/jira/get-issue", { issueKey });
+      if (tool === "search")   data = await postJson("/jira/search", { jql, maxResults: +maxResults });
+      if (tool === "concept")  data = await postJson("/jira/search-concept", { phrases: jql.split(",").map(s=>s.trim()).filter(Boolean), field: "text", maxResults: +maxResults });
+      if (tool === "create")   data = await postJson("/jira/create-issue", { project, summary, issueType, description });
+      if (tool === "comment")  data = await postJson("/jira/add-comment", { issueKey, comment });
+      if (tool === "assign")   data = await postJson("/jira/assign-issue", { issueKey, assignee });
+      if (tool === "link")     data = await postJson("/jira/link-issues", { inwardIssue: inward, outwardIssue: outward, linkType });
+      if (tool === "analyze")  data = await postJson("/jira/analyze-support-ticket", { issueKey, sinceHours: +anHours, executeApi: anExec });
+      setResult(JSON.stringify(data, null, 2));
+    } catch (err) {
+      setResult(`Error: ${err.message}`);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <div className="panel-view">
+      <div className="panel-header">
+        <h2>🔧 MCP Tools</h2>
+        <p>Direct Jira actions and ticket analysis — no chat required.</p>
+      </div>
+      <div className="card" style={{ marginBottom: 14 }}>
+        <div className="form-grid">
+          <div className="field">
+            <label>Tool</label>
+            <select value={tool} onChange={(e) => setTool(e.target.value)}>
+              <option value="get">Get Issue</option>
+              <option value="search">Search Issues (JQL)</option>
+              <option value="concept">Search Concept</option>
+              <option value="create">Create Issue</option>
+              <option value="comment">Add Comment</option>
+              <option value="assign">Assign Issue</option>
+              <option value="link">Link Issues</option>
+              <option value="analyze">Analyze Support Ticket</option>
+            </select>
+          </div>
+
+          {["get","comment","assign","analyze"].includes(tool) && (
+            <div className="field">
+              <label>Issue Key</label>
+              <input value={issueKey} onChange={(e) => setIssueKey(e.target.value)} placeholder="CRSUP-4421" />
+            </div>
+          )}
+
+          {["search","concept"].includes(tool) && (
+            <>
+              <div className="field grow">
+                <label>{tool === "concept" ? "Phrases (comma-separated)" : "JQL"}</label>
+                <input value={jql} onChange={(e) => setJql(e.target.value)}
+                  placeholder={tool === "concept" ? "hotel unavailable, hotel not bookable" : "project=CRSUP AND status=Open"} />
+              </div>
+              <div className="field" style={{ maxWidth: 100 }}>
+                <label>Max</label>
+                <input type="number" value={maxResults} onChange={(e) => setMaxResults(e.target.value)} />
+              </div>
+            </>
+          )}
+
+          {tool === "create" && (
+            <>
+              <div className="field"><label>Project</label><input value={project} onChange={(e) => setProject(e.target.value)} /></div>
+              <div className="field"><label>Issue Type</label><input value={issueType} onChange={(e) => setIssueType(e.target.value)} /></div>
+              <div className="field grow"><label>Summary</label><input value={summary} onChange={(e) => setSummary(e.target.value)} /></div>
+              <div className="field grow"><label>Description</label><input value={description} onChange={(e) => setDescription(e.target.value)} /></div>
+            </>
+          )}
+
+          {tool === "comment" && (
+            <div className="field grow"><label>Comment</label><input value={comment} onChange={(e) => setComment(e.target.value)} /></div>
+          )}
+
+          {tool === "assign" && (
+            <div className="field"><label>Assignee</label><input value={assignee} onChange={(e) => setAssignee(e.target.value)} placeholder="nsh50" /></div>
+          )}
+
+          {tool === "link" && (
+            <>
+              <div className="field"><label>Inward Issue</label><input value={inward} onChange={(e) => setInward(e.target.value)} /></div>
+              <div className="field"><label>Outward Issue</label><input value={outward} onChange={(e) => setOutward(e.target.value)} /></div>
+              <div className="field"><label>Link Type</label><input value={linkType} onChange={(e) => setLinkType(e.target.value)} /></div>
+            </>
+          )}
+
+          {tool === "analyze" && (
+            <>
+              <div className="field" style={{ maxWidth: 120 }}>
+                <label>Since (hours)</label>
+                <input type="number" value={anHours} onChange={(e) => setAnHours(e.target.value)} />
+              </div>
+              <div className="field" style={{ justifyContent: "flex-end" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <input type="checkbox" checked={anExec} onChange={(e) => setAnExec(e.target.checked)} />
+                  Execute API
+                </label>
+              </div>
+            </>
+          )}
+        </div>
+
+        <div className="toolbar">
+          <button className="btn" onClick={runTool} disabled={running}>
+            {running ? "Running…" : "▶ Run Tool"}
+          </button>
+        </div>
+
+        <pre className="result-box">{result}</pre>
+      </div>
+    </div>
+  );
+}
+
+// ── Orchestrator view ─────────────────────────────────────────
+function OrchestratorView() {
+  const [dryRun, setDryRun] = useState(true);
+  const [testKey, setTestKey] = useState("");
+  const [status, setStatus] = useState("Idle");
+  const [output, setOutput] = useState("Ready. Click Run to start.");
+  const [moves, setMoves] = useState([]);
+  const [kept, setKept] = useState([]);
+  const ctrlRef = useRef(null);
+
+  const run = async () => {
+    setOutput(""); setMoves([]); setKept([]); setStatus("Running");
+    ctrlRef.current = new AbortController();
+    try {
+      const resp = await fetch("/run-orchestrator", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dry_run: String(dryRun), test_key: testKey.trim() }),
+        signal: ctrlRef.current.signal,
+      });
+      const reader = resp.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let idx;
+        while ((idx = buf.indexOf("\n\n")) !== -1) {
+          const frame = buf.slice(0, idx); buf = buf.slice(idx + 2);
+          let ev = "message", data = "";
+          frame.split("\n").forEach((l) => {
+            if (l.startsWith("event:")) ev = l.slice(6).trim();
+            else if (l.startsWith("data:")) data += l.slice(5).trim();
+          });
+          if (!data) continue;
+          let p; try { p = JSON.parse(data); } catch { continue; }
+          if (ev === "log" && p.line) setOutput((x) => x + p.line);
+          if (ev === "move") setMoves((x) => [...x, p]);
+          if (ev === "kept") setKept((x) => [...x, p]);
+          if (ev === "done") { setStatus(p.exit_code === 0 ? "Done" : "Error"); }
+        }
+      }
+      setStatus((s) => s === "Running" ? "Done" : s);
+    } catch (err) {
+      setStatus(err.name === "AbortError" ? "Stopped" : "Error");
+    }
+  };
+
+  return (
+    <div className="panel-view">
+      <div className="panel-header">
+        <h2>🤖 Ticket Orchestrator</h2>
+        <p>Run the routing engine to classify and reassign Jira tickets.</p>
+      </div>
+      <div className="card" style={{ marginBottom: 14 }}>
+        <div className="form-grid">
+          <div className="field">
+            <label>Mode</label>
+            <select value={String(dryRun)} onChange={(e) => setDryRun(e.target.value === "true")}>
+              <option value="true">🔍 Dry Run (preview)</option>
+              <option value="false">🚀 Live (modify Jira)</option>
+            </select>
+          </div>
+          <div className="field grow">
+            <label>Test Issue Key (optional)</label>
+            <input value={testKey} onChange={(e) => setTestKey(e.target.value)} placeholder="CRSUP-4421" />
+          </div>
+        </div>
+        <div className="toolbar">
+          <button className="btn" onClick={run}>▶ Run</button>
+          <button className="btn danger" onClick={() => ctrlRef.current?.abort()}>■ Stop</button>
+          <button className="btn secondary" onClick={() => { setOutput(""); setMoves([]); setKept([]); setStatus("Idle"); }}>🗑 Clear</button>
+          <span className={`badge ${status.toLowerCase()}`}>{status}</span>
+        </div>
+        <pre className="result-box output">{output}</pre>
+      </div>
+
+      <div className="split">
+        <div className="card nested">
+          <div className="card-head small">📦 Moved / Routed ({moves.length})</div>
+          <pre className="result-box">{JSON.stringify(moves.slice(-50), null, 2)}</pre>
+        </div>
+        <div className="card nested">
+          <div className="card-head small">📥 Kept Tickets ({kept.length})</div>
+          <pre className="result-box">{JSON.stringify(kept.slice(-50), null, 2)}</pre>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── How To view ───────────────────────────────────────────────
+function HowToView() {
+  const sections = [
+    {
+      title: "🚀 Quick Start",
+      items: [
+        "Start Flask backend: python .\\ui_app.py (port 5000)",
+        "Start React UI: npm run dev in frontend/ (port 5173)",
+        "Use the sidebar icons to navigate between views",
+      ],
+      type: "ol",
+    },
+    {
+      title: "💬 AI Chat",
+      items: [
+        "Default start page — full ChatGPT-style interface",
+        "Click 💡 near the input to browse example prompts",
+        "Click any quick-start pill on the welcome screen to run instantly",
+        "Use New Chat to clear history",
+      ],
+      type: "ul",
+    },
+    {
+      title: "🔧 MCP Tools",
+      items: [
+        "Get Issue — fetch ticket by key",
+        "Search Issues — JQL query",
+        "Search Concept — phrase-based search",
+        "Create / Comment / Assign / Link",
+        "Analyze Support Ticket — single-ticket New Relic + payload analysis",
+      ],
+      type: "ul",
+    },
+    {
+      title: "📚 Bulk Dry-Run (Chat)",
+      items: [
+        "Use the AI Chat to run bulk CRSUP analysis",
+        "Say: Run bulk dry-run analysis for CRSUP using sample size 3, last 24 hours, executeApi false, enableJiraComment false.",
+        "Or slash command: /bulk-dry-run sinceHours=24 sampleSize=3",
+        "Preview is always included; real Jira commenting is opt-in",
+      ],
+      type: "ol",
+    },
+    {
+      title: "🛡 Safety Rules",
+      items: [
+        "Bulk analysis is scoped to CRSUP only",
+        "Both toggles (Execute API, Jira Comment) default to OFF",
+        "If ticket has no core filter fields, analyzer asks for them instead of running broad NRQL",
+        "Duplicate Jira comment detection prevents duplicate posting",
+      ],
+      type: "ul",
+    },
+    {
+      title: "🧩 Toggle Meanings",
+      items: [
+        "Execute API — calls EC2 singleavail endpoint",
+        "Enable Jira Comment Posting — posts real comments on CRSUP tickets",
+        "Jira comment preview is always generated for dry-run testing",
+        "Sample Size — number of latest matching CRSUP tickets to process",
+      ],
+      type: "ul",
+    },
+  ];
+
+  return (
+    <div className="panel-view">
+      <div className="panel-header">
+        <h2>📘 How To Use</h2>
+        <p>Features, step-by-step flows, and safety notes.</p>
+      </div>
+      <div className="howto-grid">
+        {sections.map((s) => (
+          <div key={s.title} className="howto-card">
+            <h4>{s.title}</h4>
+            {s.type === "ol" ? (
+              <ol>{s.items.map((i) => <li key={i}>{i}</li>)}</ol>
+            ) : (
+              <ul>{s.items.map((i) => <li key={i}>{i}</li>)}</ul>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── App root ──────────────────────────────────────────────────
+export default function App() {
+  const [tab, setTab] = useState("chat");
+
+  const view = {
+    chat: <ChatView />,
+    mcp: <MCPToolsView />,
+    orchestrator: <OrchestratorView />,
+    howto: <HowToView />,
+  }[tab] ?? <ChatView />;
+
+  return (
+    <div className="app-shell">
+      <Sidebar active={tab} onChange={setTab} />
+      <main className="main">{view}</main>
+    </div>
+  );
+}
+

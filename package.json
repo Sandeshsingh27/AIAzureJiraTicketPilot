@@ -8,7 +8,9 @@
     "start:mcp:jira-context": "node mcp_servers/jira-ticket-context-mcp-server.js",
     "start:mcp:newrelic": "node mcp_servers/newrelic-log-check-mcp-server.js",
     "start:mcp:singleavail": "node mcp_servers/singleavail-ec2-mcp-server.js",
-    "test:mcp": "echo \"Testing MCP server\""
+    "test:mcp": "echo \"Testing MCP server\"",
+    "ui:dev": "npm --prefix frontend run dev",
+    "ui:build": "npm --prefix frontend run build"
   },
   "keywords": [
     "jira",
