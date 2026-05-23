@@ -12,6 +12,7 @@ Flow:
 Set DRY_RUN=true in .env to preview without modifying Jira.
 """
 import os
+import re
 from collections import Counter
 from dotenv import load_dotenv
 from jira import JIRA
@@ -70,6 +71,16 @@ def _resolve_board_jql(jira):
         return None
 
 
+def _strip_order_by_clause(jql: str) -> str:
+    """Remove trailing ORDER BY from JQL so it can be safely embedded in AND clauses."""
+    text = str(jql or "").strip()
+    if not text:
+        return text
+    # Jira board filters often include ORDER BY; we apply final ordering at query end.
+    parts = re.split(r"\border\s+by\b", text, maxsplit=1, flags=re.IGNORECASE)
+    return parts[0].strip() if parts else text
+
+
 def fetch_team_tickets(jira):
     if TEST_ISSUE_KEY:
         jql = 'issuekey = "{}"'.format(TEST_ISSUE_KEY)
@@ -83,7 +94,7 @@ def fetch_team_tickets(jira):
     clauses = []
     board_jql = _resolve_board_jql(jira)
     if board_jql:
-        clauses.append("(" + board_jql + ")")
+        clauses.append("(" + _strip_order_by_clause(board_jql) + ")")
     elif JIRA_PROJECT_KEY:
         keys = [k.strip() for k in JIRA_PROJECT_KEY.split(",") if k.strip()]
         if len(keys) == 1:
