@@ -9,6 +9,7 @@
     "start:mcp:newrelic": "node mcp_servers/newrelic-log-check-mcp-server.js",
     "start:mcp:singleavail": "node mcp_servers/singleavail-ec2-mcp-server.js",
     "test:mcp": "echo \"Testing MCP server\"",
+    "py:check": "python -m py_compile .\\ticket_orchestrator.py && python -m py_compile .\\support_ticket_analyzer.py && python -m py_compile .\\ui_app.py && python -m py_compile .\\ticket_modules\\orchestrator.py && python -m py_compile .\\ticket_modules\\support_ticket_analyzer.py && python -m py_compile .\\ticket_modules\\web\\ui_app.py",
     "ui:dev": "npm --prefix frontend run dev",
     "ui:build": "npm --prefix frontend run build"
   },

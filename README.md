@@ -131,6 +131,19 @@ React UI tabs:
 - `Ticket Orchestrator`
 - `How To Use`
 
+### Quick Python Syntax Check
+
+Use `py_compile` to validate Python files quickly:
+
+```powershell
+python -m py_compile .\ticket_orchestrator.py
+python -m py_compile .\support_ticket_analyzer.py
+python -m py_compile .\ui_app.py
+python -m py_compile .\ticket_modules\orchestrator.py
+python -m py_compile .\ticket_modules\support_ticket_analyzer.py
+python -m py_compile .\ticket_modules\web\ui_app.py
+```
+
 ### MCP Server Usage (Claude/Cline)
 
 #### 1. Start the MCP Server

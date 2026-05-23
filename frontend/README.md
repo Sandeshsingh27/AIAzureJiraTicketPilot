@@ -18,6 +18,11 @@ It is designed to work with the existing Flask backend (`ui_app.py`) on port `50
 From project root:
 
 ```powershell
+.\venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+```powershell
 python .\ui_app.py
 ```
 
