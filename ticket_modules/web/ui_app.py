@@ -1300,6 +1300,12 @@ def index():
     return render_template_string(HTML.replace("__JIRA_HOST__", JIRA_URL))
 
 
+@app.route("/jira/config", methods=["GET"])
+def jira_config():
+    """Return non-sensitive config values needed by the React frontend."""
+    return jsonify({"jiraUrl": JIRA_URL})
+
+
 # ─── Orchestrator log parser ─────────────────────────────────────────────────
 
 KEY_RE = r"[A-Z][A-Z0-9]+-\d+"

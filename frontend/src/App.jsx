@@ -1,5 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 
+// ── Fetch Jira URL from backend config ───────────────────────
+function useJiraUrl() {
+  const [jiraUrl, setJiraUrl] = useState("");
+  useEffect(() => {
+    fetch("/jira/config")
+      .then((r) => r.json())
+      .then((d) => { if (d?.jiraUrl) setJiraUrl(d.jiraUrl.replace(/\/$/, "")); })
+      .catch(() => {});
+  }, []);
+  return jiraUrl;
+}
+
 // ── Prompt library ────────────────────────────────────────────
 const PROMPT_LIBRARY = {
   "Search & Discovery": [
@@ -11,7 +23,7 @@ const PROMPT_LIBRARY = {
     "Analyze support ticket CRSUP-4421 for hotel unavailable. Check New Relic logs from last 24 hours and build the singleavail payload.",
     "Run end-to-end analysis for CRSUP-4421, include New Relic check, build payload, and execute the singleavail API call.",
   ],
-  "Bulk Dry Run (CRSUP)": [
+  "Bulk Dry Run Analysis (CRSUP)": [
     "Run bulk dry-run analysis for CRSUP using sample size 3, last 24 hours, executeApi false, enableJiraComment false.",
     "/bulk-dry-run sinceHours=24 sampleSize=5 executeApi=true enableJiraComment=false extra keywords: hotel closed, property suspended",
   ],
@@ -382,8 +394,26 @@ function MCPToolsView() {
   );
 }
 
+// ── Ticket key link helper ────────────────────────────────────
+function TicketLink({ ticketKey, jiraUrl }) {
+  if (!ticketKey) return <span>-</span>;
+  if (jiraUrl) {
+    return (
+      <a
+        href={`${jiraUrl}/browse/${ticketKey}`}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="ticket-link"
+      >
+        {ticketKey}
+      </a>
+    );
+  }
+  return <strong>{ticketKey}</strong>;
+}
+
 // ── Orchestrator view ─────────────────────────────────────────
-function OrchestratorView() {
+function OrchestratorView({ jiraUrl = "" }) {
   const [dryRun, setDryRun] = useState(true);
   const [testKey, setTestKey] = useState("");
   const [status, setStatus] = useState("Idle");
@@ -391,6 +421,52 @@ function OrchestratorView() {
   const [moves, setMoves] = useState([]);
   const [kept, setKept] = useState([]);
   const ctrlRef = useRef(null);
+
+  const STATUS_PRIORITY = { summary: 1, classified: 2, pending: 3, "dry-run": 4, moved: 5, error: 6 };
+
+  const moveRows = Object.values(
+    moves.reduce((acc, item) => {
+      const key = item?.key;
+      if (!key) return acc;
+      const prev = acc[key] || {};
+      const newStatus = item.status || "";
+      const curStatus = prev.status || "";
+      const finalStatus =
+        (STATUS_PRIORITY[newStatus] || 0) >= (STATUS_PRIORITY[curStatus] || 0)
+          ? newStatus
+          : curStatus;
+      acc[key] = {
+        key,
+        title: item.title || prev.title || "",
+        target: item.target || prev.target || "",
+        assignee: item.assignee || prev.assignee || "",
+        matched: item.matched || prev.matched || "",
+        source: item.source || prev.source || "",
+        status: finalStatus,
+      };
+      return acc;
+    }, {})
+  );
+
+  const keptRows = Object.values(
+    kept.reduce((acc, item) => {
+      const key = item?.key;
+      if (!key) return acc;
+      acc[key] = { key, title: item.title || "" };
+      return acc;
+    }, {})
+  );
+
+  const statusLabel = (status) => {
+    const s = String(status || "").toLowerCase();
+    if (s === "moved") return "Moved";
+    if (s === "dry-run") return "Dry Run";
+    if (s === "pending") return "Pending";
+    if (s === "classified") return "Classified";
+    if (s === "summary") return "Summary";
+    if (s === "error") return "Error";
+    return status || "-";
+  };
 
   const run = async () => {
     setOutput(""); setMoves([]); setKept([]); setStatus("Running");
@@ -460,14 +536,70 @@ function OrchestratorView() {
         <pre className="result-box output">{output}</pre>
       </div>
 
-      <div className="split">
+      <div className="stack">
         <div className="card nested">
-          <div className="card-head small">📦 Moved / Routed ({moves.length})</div>
-          <pre className="result-box">{JSON.stringify(moves.slice(-50), null, 2)}</pre>
+          <div className="card-head small">📦 Moved / Routed ({moveRows.length})</div>
+          {moveRows.length === 0 ? (
+            <div className="empty-box">No moved/routed tickets yet.</div>
+          ) : (
+            <div className="table-wrap">
+              <table className="results-table">
+                <thead>
+                  <tr>
+                    <th>Ticket</th>
+                    <th>Title</th>
+                    <th>Routed To</th>
+                    <th>Assignee</th>
+                    <th>Matched</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {moveRows.map((row) => (
+                    <tr key={row.key}>
+                      <td><TicketLink ticketKey={row.key} jiraUrl={jiraUrl} /></td>
+                      <td>{row.title || "-"}</td>
+                      <td>{row.target || "-"}</td>
+                      <td>{row.assignee || "-"}</td>
+                      <td>{row.matched || "-"}</td>
+                      <td>
+                        <span className={`status-pill ${String(row.status || "").toLowerCase()}`}>
+                          {statusLabel(row.status)}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
         <div className="card nested">
-          <div className="card-head small">📥 Kept Tickets ({kept.length})</div>
-          <pre className="result-box">{JSON.stringify(kept.slice(-50), null, 2)}</pre>
+          <div className="card-head small">📥 Kept Tickets ({keptRows.length})</div>
+          {keptRows.length === 0 ? (
+            <div className="empty-box">No kept tickets yet.</div>
+          ) : (
+            <div className="table-wrap">
+              <table className="results-table">
+                <thead>
+                  <tr>
+                    <th>Ticket</th>
+                    <th>Title</th>
+                    <th>Decision</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {keptRows.map((row) => (
+                    <tr key={row.key}>
+                      <td><TicketLink ticketKey={row.key} jiraUrl={jiraUrl} /></td>
+                      <td>{row.title || "-"}</td>
+                      <td><span className="status-pill keep">KEEP</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -564,11 +696,12 @@ function HowToView() {
 // ── App root ──────────────────────────────────────────────────
 export default function App() {
   const [tab, setTab] = useState("chat");
+  const jiraUrl = useJiraUrl();
 
   const view = {
     chat: <ChatView />,
     mcp: <MCPToolsView />,
-    orchestrator: <OrchestratorView />,
+    orchestrator: <OrchestratorView jiraUrl={jiraUrl} />,
     howto: <HowToView />,
   }[tab] ?? <ChatView />;
 
