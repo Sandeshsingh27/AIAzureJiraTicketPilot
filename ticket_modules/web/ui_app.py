@@ -45,6 +45,23 @@ JIRA_HEADERS = {
 KEYWORDS_FILE = Path(__file__).resolve().parents[2] / "ticket_analysis_keywords.json"
 
 
+def _int_env(name: str, default: int, *, minimum: int | None = None, maximum: int | None = None) -> int:
+    try:
+        value = int(os.getenv(name, str(default)).strip())
+    except Exception:
+        value = default
+    if minimum is not None:
+        value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
+
+
+BULK_DRY_RUN_SINCE_HOURS = _int_env("BULK_DRY_RUN_SINCE_HOURS", 24, minimum=1, maximum=240)
+BULK_DRY_RUN_SAMPLE_SIZE = _int_env("BULK_DRY_RUN_SAMPLE_SIZE", 3, minimum=1, maximum=10)
+SINGLE_ANALYZE_SINCE_HOURS = _int_env("SINGLE_ANALYZE_SINCE_HOURS", 24, minimum=1, maximum=240)
+
+
 def _load_availability_keywords_for_ui() -> list[str]:
     default_keywords = ["hotel not available", "hotel unavailable", "hotel not bookable"]
     try:
@@ -422,11 +439,6 @@ HTML = """
         <input type="text" id="an-key" placeholder="e.g. CRSUP-4421"
                style="background:#0f172a; border:1px solid #334155; color:#e2e8f0; padding:11px 14px; border-radius:8px; font-size:.95rem;"/>
       </div>
-      <div style="display:flex; flex-direction:column; width:120px;">
-        <label style="font-size:.82rem; color:#94a3b8; margin-bottom:6px;">Since (h)</label>
-        <input type="number" id="an-hours" value="24" min="1" max="240"
-               style="background:#0f172a; border:1px solid #334155; color:#e2e8f0; padding:11px 14px; border-radius:8px; font-size:.95rem;"/>
-      </div>
       <div style="display:flex; align-items:center; gap:8px; color:#cbd5e1; font-size:.9rem;">
         <input type="checkbox" id="an-exec" /> Execute API
       </div>
@@ -440,16 +452,6 @@ HTML = """
         <input type="text" value="CRSUP" disabled
                style="background:#111827; border:1px solid #334155; color:#94a3b8; padding:11px 14px; border-radius:8px; font-size:.95rem;"/>
       </div>
-      <div style="display:flex; flex-direction:column; width:120px;">
-        <label style="font-size:.82rem; color:#94a3b8; margin-bottom:6px;">Since (h)</label>
-        <input type="number" id="ab-hours" value="24" min="1" max="240"
-               style="background:#0f172a; border:1px solid #334155; color:#e2e8f0; padding:11px 14px; border-radius:8px; font-size:.95rem;"/>
-      </div>
-      <div style="display:flex; flex-direction:column; width:140px;">
-        <label style="font-size:.82rem; color:#94a3b8; margin-bottom:6px;">Sample Size</label>
-        <input type="number" id="ab-sample" value="3" min="1" max="10"
-               style="background:#0f172a; border:1px solid #334155; color:#e2e8f0; padding:11px 14px; border-radius:8px; font-size:.95rem;"/>
-      </div>
       <div style="display:flex; flex-direction:column; flex:1; min-width:320px;">
         <label style="font-size:.82rem; color:#94a3b8; margin-bottom:6px;">Extra Keywords (optional, comma-separated)</label>
         <input type="text" id="ab-extra-keywords" placeholder="e.g. hotel closed, property suspended"
@@ -462,7 +464,7 @@ HTML = """
         <input type="checkbox" id="ab-jira-comment" /> Enable Jira Comment Posting (CRSUP only)
       </div>
       <div style="display:flex; align-items:center; color:#facc15; font-size:.82rem;">
-        Sample Size = number of latest matching CRSUP tickets to analyze. Safe defaults keep API and commenting off.
+        Since hours and sample size are fixed by backend env defaults. Safe defaults keep API and commenting off.
       </div>
       <div style="display:flex; align-items:center; color:#94a3b8; font-size:.8rem; width:100%;">
         Both off by default for safe production testing.
@@ -512,7 +514,7 @@ HTML = """
         <summary>📘 How to ask better</summary>
         <div class="prompt-tips">
           <div>- Mention issue key for single-ticket actions: <code>CRSUP-4421</code></div>
-          <div>- For bulk dry-run in chat: include <code>sample size</code>, <code>last N hours</code>, toggle flags</div>
+          <div>- For bulk dry-run in chat: use toggle flags and optional extra keywords</div>
           <div>- Use <code>enableJiraComment false</code> for safe testing</div>
           <div>- Add extra keywords with: <code>extra keywords: hotel closed, property suspended</code></div>
         </div>
@@ -525,7 +527,7 @@ HTML = """
         <button class="prompt-chip" onclick="usePrompt('Find all open CRSUP tickets about Hotel Unavailable')">Find open CRSUP unavailable tickets</button>
         <button class="prompt-chip" onclick="usePrompt('Show details of CRSUP-4421')">Show issue details</button>
         <button class="prompt-chip" onclick="usePrompt('Analyze support ticket CRSUP-4421 for hotel unavailable. Check New Relic logs from last 24 hours and build the singleavail payload.')">Analyze single ticket</button>
-        <button class="prompt-chip" onclick="usePrompt('Run bulk dry-run analysis for CRSUP using sample size 3, last 24 hours, executeApi false, enableJiraComment false.')">Bulk dry run safe defaults</button>
+        <button class="prompt-chip" onclick="usePrompt('Run bulk dry-run analysis for CRSUP with safe defaults, executeApi false, enableJiraComment false.')">Bulk dry run safe defaults</button>
       </div>
     </details>
 
@@ -541,7 +543,7 @@ HTML = """
             <li>"Find similar tickets to CRSUP-4421, create a parent ticket and link them all"</li>
             <li>"Analyze support ticket CRSUP-4421 for hotel unavailable. Check New Relic logs from last 24 hours and build the singleavail payload."</li>
             <li>"Run end-to-end analysis for CRSUP-4421, include New Relic check, build payload, and execute the singleavail API call."</li>
-            <li>"Run bulk dry-run analysis for CRSUP using sample size 3, last 24 hours, executeApi false, enableJiraComment false."</li>
+            <li>"Run bulk dry-run analysis for CRSUP with safe defaults, executeApi false, enableJiraComment false."</li>
           </ul>
         </div>
       </div>
@@ -606,15 +608,15 @@ HTML = """
         <li><code>Show details of CRSUP-4421</code></li>
         <li><code>Create a parent issue for these tickets and link them</code></li>
         <li><code>Analyze CRSUP-4421 for hotel unavailable and execute singleavail API</code></li>
-        <li><code>Run bulk dry-run analysis for CRSUP using sample size 3, last 24 hours, executeApi false, enableJiraComment false.</code></li>
-        <li><code>/bulk-dry-run sinceHours=24 sampleSize=5 executeApi=true enableJiraComment=false</code></li>
+        <li><code>Run bulk dry-run analysis for CRSUP with safe defaults, executeApi false, enableJiraComment false.</code></li>
+        <li><code>/bulk-dry-run executeApi=true enableJiraComment=false extra keywords: hotel closed</code></li>
       </ul>
     </div>
     <div class="help-card">
       <h3>🧪 Analyze Support Ticket Steps</h3>
       <ol>
         <li>Select <code>Analyze Support Ticket</code> in Jira MCP Tools.</li>
-        <li>Enter issue key and lookback hours.</li>
+        <li>Enter issue key (lookback window comes from backend env default).</li>
         <li>Optionally tick <code>Execute API</code>.</li>
         <li>Click <code>Analyze</code> and inspect payload, New Relic summary, response, and Jira comment result.</li>
       </ol>
@@ -623,7 +625,7 @@ HTML = """
       <h3>📚 Bulk Analyze (CRSUP Dry Run) Steps</h3>
       <ol>
         <li>Select <code>Bulk Analyze (CRSUP Dry Run)</code> in Jira MCP Tools.</li>
-        <li>Set <code>Since (h)</code> and <code>Sample Size</code>.</li>
+         <li>Since and sample size are fixed by backend env defaults.</li>
         <li>Optionally add <code>Extra Keywords</code> to extend the backend keyword list.</li>
         <li>Use <code>Execute API</code> only if you want EC2 singleavail executed during dry run.</li>
         <li>Use <code>Enable Jira Comment Posting (CRSUP only)</code> only when you want real comments posted.</li>
@@ -637,7 +639,7 @@ HTML = """
         <li><b>Execute API</b>: runs the EC2 singleavail call for the analyzed ticket(s).</li>
         <li><b>Enable Jira Comment Posting (CRSUP only)</b>: posts actual Jira comments on CRSUP tickets.</li>
         <li><b>Jira comment preview</b>: generated in dry-run results for testing when available.</li>
-        <li><b>Sample Size</b>: number of latest matching CRSUP tickets picked for bulk analysis.</li>
+        <li><b>Bulk defaults</b>: since-hours and sample-size are read from backend env configuration.</li>
       </ul>
     </div>
     <div class="help-card">
@@ -715,8 +717,8 @@ const PROMPT_LIBRARY = {
     'Run end-to-end analysis for CRSUP-4421, include New Relic check, build payload, and execute the singleavail API call.'
   ],
   'Bulk Dry Run (CRSUP)': [
-    'Run bulk dry-run analysis for CRSUP using sample size 3, last 24 hours, executeApi false, enableJiraComment false.',
-    'Run bulk dry-run analysis for CRSUP with extra keywords: hotel closed, property suspended; sample size 5; executeApi true; enableJiraComment false.'
+    'Run bulk dry-run analysis for CRSUP with safe defaults, executeApi false, enableJiraComment false.',
+    'Run bulk dry-run analysis for CRSUP with extra keywords: hotel closed, property suspended; executeApi true; enableJiraComment false.'
   ]
 };
 
@@ -1260,21 +1262,18 @@ async function linkIssues() {
 // ── Analyze Support Ticket ─────────────────────────────────────
 async function analyzeSupportTicket() {
   const issueKey = document.getElementById('an-key').value.trim();
-  const sinceHours = parseInt(document.getElementById('an-hours').value, 10) || 24;
   const executeApi = document.getElementById('an-exec').checked;
   if (!issueKey) { alert('Issue key is required'); return; }
   showResult('jira-result', 'Analyzing...');
   const r = await fetch('/jira/analyze-support-ticket', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({issueKey, sinceHours, executeApi})
+    body: JSON.stringify({issueKey, executeApi})
   });
   showResult('jira-result', await r.json());
 }
 
 // ── Bulk Analyze (CRSUP dry-run) ──────────────────────────────
 async function analyzeBulkDryRun() {
-  const sinceHours = parseInt(document.getElementById('ab-hours').value, 10) || 24;
-  const sampleSize = parseInt(document.getElementById('ab-sample').value, 10) || 3;
   const extraKeywordsRaw = document.getElementById('ab-extra-keywords').value.trim();
   const extraKeywords = extraKeywordsRaw ? extraKeywordsRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
   const executeApi = document.getElementById('ab-exec-api').checked;
@@ -1282,7 +1281,7 @@ async function analyzeBulkDryRun() {
   showResult('jira-result', 'Running CRSUP bulk dry-run analysis...');
   const r = await fetch('/jira/analyze-bulk-dry-run', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({project: 'CRSUP', sinceHours, sampleSize, extraKeywords, executeApi, enableJiraComment})
+    body: JSON.stringify({project: 'CRSUP', extraKeywords, executeApi, enableJiraComment})
   });
   showResult('jira-result', await r.json());
 }
@@ -1677,7 +1676,7 @@ def jira_search_concept():
 def jira_analyze_support_ticket():
     body = request.json or {}
     issue_key = str(body.get("issueKey") or "").strip()
-    since_hours = int(body.get("sinceHours", 24))
+    since_hours = SINGLE_ANALYZE_SINCE_HOURS
     execute_api = bool(body.get("executeApi", False))
     enable_jira_comment = bool(body.get("enableJiraComment", False))
     if not issue_key:
@@ -1700,8 +1699,8 @@ def jira_analyze_support_ticket():
 def jira_analyze_bulk_dry_run():
     body = request.json or {}
     project = str(body.get("project") or "CRSUP").strip().upper()
-    since_hours = int(body.get("sinceHours", 24))
-    sample_size = int(body.get("sampleSize", 3))
+    since_hours = BULK_DRY_RUN_SINCE_HOURS
+    sample_size = BULK_DRY_RUN_SAMPLE_SIZE
     extra_keywords_raw = body.get("extraKeywords") or []
     execute_api = bool(body.get("executeApi", False))
     enable_jira_comment = bool(body.get("enableJiraComment", False))
@@ -1710,7 +1709,6 @@ def jira_analyze_bulk_dry_run():
     if project != "CRSUP":
         return jsonify({"error": "Only CRSUP is allowed for bulk dry run."}), 400
 
-    sample_size = max(1, min(sample_size, 10))
     keywords = _load_availability_keywords_for_ui()
     extra_keywords: list[str] = []
     if isinstance(extra_keywords_raw, list):
@@ -1785,7 +1783,8 @@ def jira_analyze_bulk_dry_run():
         "mode": "bulk-keyword-analysis-dry-run",
         "project": "CRSUP",
         "dryRun": True,
-        "sampleSizeRequested": sample_size,
+        "sinceHoursConfigured": since_hours,
+        "sampleSizeConfigured": sample_size,
         "sampleSizeMeaning": "Number of latest matching CRSUP tickets analyzed in this run.",
         "executeApi": execute_api,
         "jiraCommentPreviewEnabled": True,

@@ -41,6 +41,9 @@ This document explains every key in `.env.example`, where it is used, and why it
 | `EC2_SINGLEAVAIL_URL` | Optional | Analyzer + EC2 MCP | Endpoint for singleavail API execution. |
 | `EC2_BEARER_TOKEN` | Optional | Analyzer + EC2 MCP | Authorization token for EC2 singleavail endpoint. |
 | `TICKET_ANALYSIS_KEYWORDS_FILE` | Optional | `support_ticket_analyzer.py` | Override path for availability keyword config JSON. |
+| `BULK_DRY_RUN_SINCE_HOURS` | Optional (default `24`) | `ticket_modules/web/ui_app.py`, `ticket_modules/chat/chat_agent.py` | Backend lookback window for CRSUP bulk dry-run analysis. |
+| `BULK_DRY_RUN_SAMPLE_SIZE` | Optional (default `3`) | `ticket_modules/web/ui_app.py`, `ticket_modules/chat/chat_agent.py` | Backend ticket count limit for CRSUP bulk dry-run analysis (clamped to 1-10). |
+| `SINGLE_ANALYZE_SINCE_HOURS` | Optional (default `24`) | `ticket_modules/web/ui_app.py`, `ticket_modules/chat/chat_agent.py` | Backend lookback window for single-ticket `Analyze Support Ticket` runs. |
 
 ## Cleanup Performed
 

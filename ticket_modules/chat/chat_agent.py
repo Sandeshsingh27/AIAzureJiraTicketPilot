@@ -54,6 +54,23 @@ _SCOPE_CLAUSE  = _PROJECT_CLAUSE + (" AND " + _STATUS_CLAUSE if _STATUS_CLAUSE e
 KEYWORDS_FILE = Path(__file__).resolve().parents[2] / "ticket_analysis_keywords.json"
 
 
+def _int_env(name: str, default: int, *, minimum: int | None = None, maximum: int | None = None) -> int:
+    try:
+        value = int(os.getenv(name, str(default)).strip())
+    except Exception:
+        value = default
+    if minimum is not None:
+        value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
+
+
+BULK_DRY_RUN_SINCE_HOURS = _int_env("BULK_DRY_RUN_SINCE_HOURS", 24, minimum=1, maximum=240)
+BULK_DRY_RUN_SAMPLE_SIZE = _int_env("BULK_DRY_RUN_SAMPLE_SIZE", 3, minimum=1, maximum=10)
+SINGLE_ANALYZE_SINCE_HOURS = _int_env("SINGLE_ANALYZE_SINCE_HOURS", 24, minimum=1, maximum=240)
+
+
 def _load_availability_keywords() -> list[str]:
     defaults = ["hotel not available", "hotel unavailable", "hotel not bookable"]
     try:
@@ -361,14 +378,14 @@ def tool_search_concept(phrases: list, field: str = "text",
     }
 
 
-def tool_analyze_support_ticket(issueKey: str, sinceHours: int = 24, executeApi: bool = False, enableJiraComment: bool = False):
+def tool_analyze_support_ticket(issueKey: str, executeApi: bool = False, enableJiraComment: bool = False):
     """Run support-ticket analyzer for hotel unavailable/not-bookable investigations."""
     if not _key_is_allowed(issueKey):
         return {"error": f"Refused: {issueKey} is outside allowed projects {ALLOWED_PROJECTS}."}
     try:
         result = run_support_ticket_analysis(
             issue_key=issueKey,
-            since_hours=int(sinceHours),
+            since_hours=SINGLE_ANALYZE_SINCE_HOURS,
             execute_api=bool(executeApi),
             output_path=None,
             comment_jira=bool(enableJiraComment),
@@ -379,14 +396,8 @@ def tool_analyze_support_ticket(issueKey: str, sinceHours: int = 24, executeApi:
         return {"error": str(e)}
 
 
-def tool_analyze_bulk_dry_run(
-    sinceHours: int = 24,
-    sampleSize: int = 3,
-    extraKeywords: list | None = None,
-    executeApi: bool = False,
-    enableJiraComment: bool = False,
-):
-    """Run CRSUP-only bulk keyword analysis in dry-run mode with optional API/comment toggles."""
+def tool_analyze_bulk_dry_run(extraKeywords: list | None = None, executeApi: bool = False, enableJiraComment: bool = False):
+    """Run CRSUP-only bulk keyword analysis in dry-run mode with env-configured since/sample defaults."""
     keywords = _load_availability_keywords()
     extras: list[str] = []
     for item in (extraKeywords or []):
@@ -401,7 +412,8 @@ def tool_analyze_bulk_dry_run(
     if not combined:
         return {"error": "No keywords available for bulk analysis."}
 
-    size = max(1, min(int(sampleSize), 10))
+    size = BULK_DRY_RUN_SAMPLE_SIZE
+    since_hours = BULK_DRY_RUN_SINCE_HOURS
     phrase_clause = " OR ".join([f'text ~ "\\"{kw}\\""' for kw in combined])
     jql = (
         f'(project = "CRSUP" AND statusCategory != Done AND ({phrase_clause})) '
@@ -426,7 +438,7 @@ def tool_analyze_bulk_dry_run(
         try:
             analysis = run_support_ticket_analysis(
                 issue_key=key,
-                since_hours=int(sinceHours),
+                since_hours=since_hours,
                 execute_api=bool(executeApi),
                 output_path=None,
                 comment_jira=bool(enableJiraComment),
@@ -461,7 +473,8 @@ def tool_analyze_bulk_dry_run(
         "mode": "bulk-keyword-analysis-dry-run",
         "project": "CRSUP",
         "dryRun": True,
-        "sampleSizeRequested": size,
+        "sinceHoursConfigured": since_hours,
+        "sampleSizeConfigured": size,
         "sampleSizeMeaning": "Number of latest matching CRSUP tickets analyzed in this run.",
         "keywordsFromConfig": keywords,
         "keywordsFromInput": extras,
@@ -486,6 +499,7 @@ def _build_bulk_dry_run_reply(result: dict, args: dict) -> str:
         "Ran CRSUP bulk dry-run directly (bypassing LLM parsing to avoid content-filter false positives).",
         f"Matched {result.get('ticketsMatched', 0)} ticket(s).",
         f"Picked (sample): {', '.join([p.get('issueKey', '?') for p in picked]) if picked else 'none'}",
+        f"Using backend defaults: sinceHours={result.get('sinceHoursConfigured')}, sampleSize={result.get('sampleSizeConfigured')}",
         f"executeApi={bool(args.get('executeApi'))}, enableJiraComment={bool(args.get('enableJiraComment'))}",
         "",
         "Dry-run log:",
@@ -541,32 +555,20 @@ def _extract_bulk_dry_run_args(user_message: str) -> dict | None:
         return None
 
     args = {
-        "sinceHours": 24,
-        "sampleSize": 3,
         "extraKeywords": [],
         "executeApi": False,
         "enableJiraComment": False,
     }
 
     # Parse key=value tokens for slash-command style.
-    for key, val in re.findall(r"\b(sinceHours|sampleSize|executeApi|enableJiraComment)\s*=\s*([^,;\s]+)", text, flags=re.IGNORECASE):
+    for key, val in re.findall(r"\b(executeApi|enableJiraComment)\s*=\s*([^,;\s]+)", text, flags=re.IGNORECASE):
         k = key.lower()
-        if k == "sincehours" and str(val).isdigit():
-            args["sinceHours"] = int(val)
-        elif k == "samplesize" and str(val).isdigit():
-            args["sampleSize"] = int(val)
-        elif k == "executeapi":
+        if k == "executeapi":
             args["executeApi"] = _parse_bool_token(val, args["executeApi"])
         elif k == "enablejiracomment":
             args["enableJiraComment"] = _parse_bool_token(val, args["enableJiraComment"])
 
     # Parse natural-language variants.
-    m = re.search(r"sample\s*size\s*(\d+)", lower)
-    if m:
-        args["sampleSize"] = int(m.group(1))
-    m = re.search(r"last\s*(\d+)\s*hours?", lower)
-    if m:
-        args["sinceHours"] = int(m.group(1))
     m = re.search(r"executeapi\s*(true|false|yes|no|on|off|1|0)", lower)
     if m:
         args["executeApi"] = _parse_bool_token(m.group(1), args["executeApi"])
@@ -660,7 +662,6 @@ TOOLS_SCHEMA = [
                 "type": "object",
                 "properties": {
                     "issueKey":   {"type": "string", "description": "Jira issue key e.g. CRSUP-4421"},
-                    "sinceHours": {"type": "integer", "default": 24, "description": "Lookback window in hours"},
                     "executeApi": {"type": "boolean", "default": False, "description": "Whether to call EC2 singleavail endpoint"},
                     "enableJiraComment": {"type": "boolean", "default": False, "description": "Whether to post singleavail payload and response as Jira comment"},
                 },
@@ -673,15 +674,13 @@ TOOLS_SCHEMA = [
         "function": {
             "name": "analyze_bulk_dry_run",
             "description": (
-                "Run CRSUP-only bulk dry-run analysis for availability keywords across a sample of tickets. "
+                "Run CRSUP-only bulk dry-run analysis for availability keywords across a backend-configured sample of tickets. "
                 "Supports executeApi toggle and optional Jira comment posting toggle. "
-                "Preview is included for testing."
+                "Since-hours and sample-size are taken from env defaults. Preview is included for testing."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "sinceHours": {"type": "integer", "default": 24, "description": "Lookback window in hours"},
-                    "sampleSize": {"type": "integer", "default": 3, "description": "Number of latest matching CRSUP tickets to analyze (1-10)"},
                     "extraKeywords": {
                         "type": "array",
                         "items": {"type": "string"},

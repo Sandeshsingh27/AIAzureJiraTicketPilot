@@ -24,15 +24,15 @@ const PROMPT_LIBRARY = {
     "Run end-to-end analysis for CRSUP-4421, include New Relic check, build payload, and execute the singleavail API call.",
   ],
   "Bulk Dry Run Analysis (CRSUP)": [
-    "Run bulk dry-run analysis for CRSUP using sample size 3, last 24 hours, executeApi false, enableJiraComment false.",
-    "/bulk-dry-run sinceHours=24 sampleSize=5 executeApi=true enableJiraComment=false extra keywords: hotel closed, property suspended",
+    "Run bulk dry-run analysis for CRSUP with safe defaults and executeApi false, enableJiraComment false.",
+    "/bulk-dry-run executeApi=true enableJiraComment=false extra keywords: hotel closed, property suspended",
   ],
 };
 
 const QUICK_PILLS = [
   "Find open CRSUP hotel unavailable tickets",
   "Analyze CRSUP-4421 for hotel unavailable",
-  "Bulk dry-run for CRSUP, sample size 3",
+  "Bulk dry-run for CRSUP with safe defaults",
   "Show details of CRSUP-4421",
 ];
 
@@ -273,10 +273,12 @@ function MCPToolsView() {
   const [inward, setInward] = useState("");
   const [outward, setOutward] = useState("");
   const [linkType, setLinkType] = useState("Relates");
-   const [anHours, setAnHours] = useState(24);
-   const [anExec, setAnExec] = useState(false);
-   const [anComment, setAnComment] = useState(false);
-   const [running, setRunning] = useState(false);
+  const [anExec, setAnExec] = useState(false);
+  const [anComment, setAnComment] = useState(false);
+  const [abKeywords, setAbKeywords] = useState("");
+  const [abExec, setAbExec] = useState(false);
+  const [abComment, setAbComment] = useState(false);
+  const [running, setRunning] = useState(false);
 
   const runTool = async () => {
     setRunning(true);
@@ -290,7 +292,15 @@ function MCPToolsView() {
       if (tool === "comment")  data = await postJson("/jira/add-comment", { issueKey, comment });
       if (tool === "assign")   data = await postJson("/jira/assign-issue", { issueKey, assignee });
       if (tool === "link")     data = await postJson("/jira/link-issues", { inwardIssue: inward, outwardIssue: outward, linkType });
-       if (tool === "analyze")  data = await postJson("/jira/analyze-support-ticket", { issueKey, sinceHours: +anHours, executeApi: anExec, enableJiraComment: anComment });
+      if (tool === "analyze") data = await postJson("/jira/analyze-support-ticket", { issueKey, executeApi: anExec, enableJiraComment: anComment });
+      if (tool === "analyze-bulk") {
+        data = await postJson("/jira/analyze-bulk-dry-run", {
+          project: "CRSUP",
+          extraKeywords: abKeywords.split(",").map((s) => s.trim()).filter(Boolean),
+          executeApi: abExec,
+          enableJiraComment: abComment,
+        });
+      }
       setResult(JSON.stringify(data, null, 2));
     } catch (err) {
       setResult(`Error: ${err.message}`);
@@ -318,10 +328,11 @@ function MCPToolsView() {
               <option value="assign">Assign Issue</option>
               <option value="link">Link Issues</option>
               <option value="analyze">Analyze Support Ticket</option>
+              <option value="analyze-bulk">Bulk Analyze (CRSUP Dry Run)</option>
             </select>
           </div>
 
-          {["get","comment","assign","analyze"].includes(tool) && (
+          {["get", "comment", "assign", "analyze"].includes(tool) && (
             <div className="field">
               <label>Issue Key</label>
               <input value={issueKey} onChange={(e) => setIssueKey(e.target.value)} placeholder="CRSUP-4421" />
@@ -367,26 +378,51 @@ function MCPToolsView() {
             </>
           )}
 
-           {tool === "analyze" && (
-             <>
-               <div className="field" style={{ maxWidth: 120 }}>
-                 <label>Since (hours)</label>
-                 <input type="number" value={anHours} onChange={(e) => setAnHours(e.target.value)} />
-               </div>
-               <div className="field" style={{ justifyContent: "flex-end" }}>
-                 <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                   <input type="checkbox" checked={anExec} onChange={(e) => setAnExec(e.target.checked)} />
-                   Execute API
-                 </label>
-               </div>
-               <div className="field" style={{ justifyContent: "flex-end" }}>
-                 <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                   <input type="checkbox" checked={anComment} onChange={(e) => setAnComment(e.target.checked)} />
-                   Post Comment
-                 </label>
-               </div>
-             </>
-           )}
+          {tool === "analyze" && (
+            <>
+              <div className="field" style={{ justifyContent: "flex-end" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <input type="checkbox" checked={anExec} onChange={(e) => setAnExec(e.target.checked)} />
+                  Execute API
+                </label>
+              </div>
+              <div className="field" style={{ justifyContent: "flex-end" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <input type="checkbox" checked={anComment} onChange={(e) => setAnComment(e.target.checked)} />
+                  Post Comment
+                </label>
+              </div>
+            </>
+          )}
+
+          {tool === "analyze-bulk" && (
+            <>
+              <div className="field" style={{ maxWidth: 130 }}>
+                <label>Project</label>
+                <input value="CRSUP" disabled />
+              </div>
+              <div className="field grow">
+                <label>Extra Keywords (optional, comma-separated)</label>
+                <input
+                  value={abKeywords}
+                  onChange={(e) => setAbKeywords(e.target.value)}
+                  placeholder="hotel closed, property suspended"
+                />
+              </div>
+              <div className="field" style={{ justifyContent: "flex-end" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <input type="checkbox" checked={abExec} onChange={(e) => setAbExec(e.target.checked)} />
+                  Execute API
+                </label>
+              </div>
+              <div className="field" style={{ justifyContent: "flex-end" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <input type="checkbox" checked={abComment} onChange={(e) => setAbComment(e.target.checked)} />
+                  Enable Jira Comment Posting
+                </label>
+              </div>
+            </>
+          )}
         </div>
 
         <div className="toolbar">
@@ -643,6 +679,7 @@ function HowToView() {
         "Search Concept — phrase-based search",
         "Create / Comment / Assign / Link",
         "Analyze Support Ticket — single-ticket New Relic + payload analysis",
+        "Bulk Analyze (CRSUP Dry Run) — backend defaults for since/sample size",
       ],
       type: "ul",
     },
@@ -650,8 +687,8 @@ function HowToView() {
       title: "📚 Bulk Dry-Run (Chat)",
       items: [
         "Use the AI Chat to run bulk CRSUP analysis",
-        "Say: Run bulk dry-run analysis for CRSUP using sample size 3, last 24 hours, executeApi false, enableJiraComment false.",
-        "Or slash command: /bulk-dry-run sinceHours=24 sampleSize=3",
+        "Say: Run bulk dry-run analysis for CRSUP with safe defaults, executeApi false, enableJiraComment false.",
+        "Or slash command: /bulk-dry-run executeApi=true enableJiraComment=false",
         "Preview is always included; real Jira commenting is opt-in",
       ],
       type: "ol",
@@ -671,8 +708,9 @@ function HowToView() {
       items: [
         "Execute API — calls EC2 singleavail endpoint",
         "Enable Jira Comment Posting — posts real comments on CRSUP tickets",
+        "Single-ticket since-hours comes from backend env defaults",
         "Jira comment preview is always generated for dry-run testing",
-        "Sample Size — number of latest matching CRSUP tickets to process",
+        "Bulk since/sample size values come from backend env defaults",
       ],
       type: "ul",
     },
