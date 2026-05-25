@@ -36,6 +36,28 @@ DEFAULT_AVAILABILITY_KEYWORDS = [
 ]
 
 
+def _int_env(name: str, default: int, *, minimum: Optional[int] = None, maximum: Optional[int] = None) -> int:
+    try:
+        value = int(str(os.getenv(name, str(default))).strip())
+    except Exception:
+        value = default
+    if minimum is not None:
+        value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
+
+
+# NRQL defaults used when explicit values are not provided by caller.
+NRQL_DEFAULT_SINCE_DAYS = _int_env("NRQL_DEFAULT_SINCE_DAYS", 7, minimum=1, maximum=30)
+NRQL_DEFAULT_LIMIT = _int_env("NRQL_DEFAULT_LIMIT", 40, minimum=1, maximum=500)
+
+# Analyzer extraction behavior toggle (set in .env)
+ANALYZER_INCLUDE_COMMENTS = str(os.getenv("ANALYZER_INCLUDE_COMMENTS", "false")).strip().lower() in {
+    "1", "true", "yes", "y", "on"
+}
+
+
 def _adf_to_text(node: Any) -> str:
     """Flatten Jira Atlassian Document Format (ADF) to plain text."""
     if node is None:
@@ -493,13 +515,18 @@ def parse_ticket_indicators(issue: Dict[str, Any]) -> Dict[str, Any]:
     summary = fields.get("summary", "") or ""
     description = _adf_to_text(fields.get("description"))
 
-    comments = []
-    comment_values = _safe_get(fields, "comment.comments") or []
-    if isinstance(comment_values, list):
-        for c in comment_values:
-            comments.append(_adf_to_text(c.get("body") if isinstance(c, dict) else c))
+    # Default behavior: ignore Jira comments for indicator extraction.
+    # Set ANALYZER_INCLUDE_COMMENTS=true only if comment parsing is explicitly required.
+    include_comments = ANALYZER_INCLUDE_COMMENTS
+    comments: List[str] = []
+    if include_comments:
+        comment_values = _safe_get(fields, "comment.comments") or []
+        if isinstance(comment_values, list):
+            for c in comment_values:
+                comments.append(_adf_to_text(c.get("body") if isinstance(c, dict) else c))
 
-    blob = "\n".join([summary, description] + comments)
+    blob_parts = [summary, description] + comments if include_comments else [summary, description]
+    blob = "\n".join(blob_parts)
     availability_keywords = _load_availability_keywords()
     availability_keyword_hits = _extract_availability_keyword_hits(blob, availability_keywords)
 
@@ -574,7 +601,7 @@ DEFAULT_NR_LOG_TABLES = ["Log", "Log_IDD_PROD", "Log_IDD_PROD_Single_Multi"]
 
 def build_nrql(
     indicators: Dict[str, Any],
-    since_hours: int,
+    since_hours: Optional[int],
     log_tables: Optional[List[str]] = None,
 ) -> str:
     """Build a NRQL query from extracted ticket indicators.
@@ -592,12 +619,22 @@ def build_nrql(
     where_parts = _build_nrql_filters(indicators)
 
     where_clause = " AND ".join(where_parts)
+    limit = NRQL_DEFAULT_LIMIT
+    try:
+        since_h = int(since_hours) if since_hours is not None else 0
+    except Exception:
+        since_h = 0
+    if since_h > 0:
+        since_clause = f"SINCE {since_h} hours ago"
+    else:
+        since_clause = f"SINCE {NRQL_DEFAULT_SINCE_DAYS} days ago"
+
     raw = (
         "SELECT timestamp, message, statusCode, responseStatus, level, "
-        "museId, hrCode, hKey, chainId, bookingSource, customerKey, arrivalDate, departureDate "
+        "museId, hrCode, hKey, chainId, bookingSource, customerKey, stayDateFrom, stayDateTo "
         f"FROM {from_clause} "
         f"WHERE {where_clause} "
-        f"SINCE {int(since_hours)} hours ago LIMIT 200"
+        f"{since_clause} LIMIT {limit}"
     )
     # Collapse any embedded newlines/carriage-returns so the query is always a
     # single flat line — NRQL sent over HTTP must not contain literal \n characters.
@@ -611,10 +648,12 @@ def _build_nrql_filters(indicators: Dict[str, Any]) -> List[str]:
     if muse_id:
         where_parts.append(f"museId IN ('{_nrql_escape(muse_id)}')")
 
-    if indicators.get("ticketHasAvailabilityIndicator"):
-        where_parts.append("(message IN ('SINGLEAVAIL') OR message LIKE '%NOT BOOKABLE%' OR message LIKE '%HOTEL NOT BOOKABLE%')")
-    else:
-        where_parts.append("message IN ('SINGLEAVAIL')")
+    # Use strict message matching for analyzer flow. If ticket specifies message type,
+    # prefer that; otherwise default to SINGLEAVAIL.
+    message_type = str(indicators.get("messageType") or "").strip().upper()
+    if not message_type:
+        message_type = "SINGLEAVAIL"
+    where_parts.append(f"message IN ('{_nrql_escape(message_type)}')")
 
     h_key = str(indicators.get("hKey") or "").strip()
     if h_key:
@@ -624,7 +663,13 @@ def _build_nrql_filters(indicators: Dict[str, Any]) -> List[str]:
     if hr_code:
         where_parts.append(f"hrCode LIKE '%{_nrql_escape(hr_code)}%'")
 
-    customer_key = str(indicators.get("customerKey") or indicators.get("kKey") or "").strip()
+    customer_key_val = indicators.get("customerKey")
+    if customer_key_val in (None, ""):
+        customer_key_val = indicators.get("kKey")
+    customer_key = str(_normalize_identifier_value(customer_key_val) or "").strip()
+    if "," in customer_key:
+        # Defensive handling for list-like accidental values; use first entry.
+        customer_key = customer_key.split(",", 1)[0].strip()
     if customer_key:
         if customer_key.isdigit():
             where_parts.append(f"customerKey = {customer_key}")
@@ -674,7 +719,7 @@ def _extract_nrql_count(results: List[Dict[str, Any]]) -> int:
 
 def build_nrql_diagnostics(
     indicators: Dict[str, Any],
-    since_hours: int,
+    since_hours: Optional[int],
     account_id: int,
     api_key: str,
     graphql_url: str,
@@ -690,9 +735,17 @@ def build_nrql_diagnostics(
     for index, predicate in enumerate(filters, start=1):
         active_filters.append(predicate)
         where_clause = " AND ".join(active_filters)
+        try:
+            since_h = int(since_hours) if since_hours is not None else 0
+        except Exception:
+            since_h = 0
+        if since_h > 0:
+            since_clause = f"SINCE {since_h} hours ago"
+        else:
+            since_clause = f"SINCE {NRQL_DEFAULT_SINCE_DAYS} days ago"
         nrql = (
             f"SELECT count(*) FROM {from_clause} "
-            f"WHERE {where_clause} SINCE {int(since_hours)} hours ago"
+            f"WHERE {where_clause} {since_clause}"
         )
         try:
             results = query_new_relic_logs(
@@ -1367,7 +1420,7 @@ def _build_missing_fields_jira_comment(missing_core_fields: List[str]) -> str:
 
 def run(
     issue_key: str,
-    since_hours: int,
+    since_hours: Optional[int],
     execute_api: bool,
     output_path: Optional[str],
     comment_jira: bool = True,

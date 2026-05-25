@@ -57,9 +57,24 @@ def _int_env(name: str, default: int, *, minimum: int | None = None, maximum: in
     return value
 
 
-BULK_DRY_RUN_SINCE_HOURS = _int_env("BULK_DRY_RUN_SINCE_HOURS", 24, minimum=1, maximum=240)
+def _opt_int_env(name: str, *, minimum: int | None = None, maximum: int | None = None) -> int | None:
+    raw = str(os.getenv(name, "")).strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except Exception:
+        return None
+    if minimum is not None:
+        value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
+
+
+BULK_DRY_RUN_SINCE_HOURS = _opt_int_env("BULK_DRY_RUN_SINCE_HOURS", minimum=1, maximum=720)
 BULK_DRY_RUN_SAMPLE_SIZE = _int_env("BULK_DRY_RUN_SAMPLE_SIZE", 3, minimum=1, maximum=10)
-SINGLE_ANALYZE_SINCE_HOURS = _int_env("SINGLE_ANALYZE_SINCE_HOURS", 24, minimum=1, maximum=240)
+SINGLE_ANALYZE_SINCE_HOURS = _opt_int_env("SINGLE_ANALYZE_SINCE_HOURS", minimum=1, maximum=720)
 
 
 def _load_availability_keywords_for_ui() -> list[str]:

@@ -36,14 +36,17 @@ This document explains every key in `.env.example`, where it is used, and why it
 | `NEW_RELIC_ACCOUNT_ID` | Yes (for analyzer/NR MCP) | `support_ticket_analyzer.py`, `newrelic-log-check-mcp-server.js` | Active New Relic account id used for queries. |
 | `NEW_RELIC_LOG_API_URL` | Optional | Analyzer + NR MCP | Used to infer regional NerdGraph URL when needed. |
 | `NEW_RELIC_GRAPHQL_URL` | Optional | Analyzer + NR MCP | Explicit NerdGraph URL override. |
+| `NRQL_DEFAULT_SINCE_DAYS` | Optional (default `7`) | `ticket_modules/support_ticket_analyzer.py` | Fallback NRQL lookback window in days when `since_hours` is not provided by caller. |
+| `NRQL_DEFAULT_LIMIT` | Optional (default `40`) | `ticket_modules/support_ticket_analyzer.py` | Default NRQL row limit used by analyzer queries. |
 | `NEW_RELIC_CA_BUNDLE` | Optional | Analyzer + NR MCP | Custom CA bundle path for TLS interception/proxy environments. |
 | `NEW_RELIC_INSECURE` | Optional | Analyzer + NR MCP | If true, disables TLS validation (testing only). |
 | `EC2_SINGLEAVAIL_URL` | Optional | Analyzer + EC2 MCP | Endpoint for singleavail API execution. |
 | `EC2_BEARER_TOKEN` | Optional | Analyzer + EC2 MCP | Authorization token for EC2 singleavail endpoint. |
 | `TICKET_ANALYSIS_KEYWORDS_FILE` | Optional | `support_ticket_analyzer.py` | Override path for availability keyword config JSON. |
-| `BULK_DRY_RUN_SINCE_HOURS` | Optional (default `24`) | `ticket_modules/web/ui_app.py`, `ticket_modules/chat/chat_agent.py` | Backend lookback window for CRSUP bulk dry-run analysis. |
+| `ANALYZER_INCLUDE_COMMENTS` | Optional (default `false`) | `ticket_modules/support_ticket_analyzer.py` | Controls whether Jira comments are included while extracting analyzer indicators (`false` recommended). |
+| `BULK_DRY_RUN_SINCE_HOURS` | Optional (unset by default) | `ticket_modules/web/ui_app.py`, `ticket_modules/chat/chat_agent.py` | Optional bulk lookback override in hours; if unset, analyzer falls back to `NRQL_DEFAULT_SINCE_DAYS` in NRQL generation. |
 | `BULK_DRY_RUN_SAMPLE_SIZE` | Optional (default `3`) | `ticket_modules/web/ui_app.py`, `ticket_modules/chat/chat_agent.py` | Backend ticket count limit for CRSUP bulk dry-run analysis (clamped to 1-10). |
-| `SINGLE_ANALYZE_SINCE_HOURS` | Optional (default `24`) | `ticket_modules/web/ui_app.py`, `ticket_modules/chat/chat_agent.py` | Backend lookback window for single-ticket `Analyze Support Ticket` runs. |
+| `SINGLE_ANALYZE_SINCE_HOURS` | Optional (unset by default) | `ticket_modules/web/ui_app.py`, `ticket_modules/chat/chat_agent.py` | Optional single-ticket lookback override in hours; if unset, analyzer falls back to `NRQL_DEFAULT_SINCE_DAYS` in NRQL generation. |
 | `CHAT_HISTORY_WINDOW` | Optional (default `18`) | `ticket_modules/chat/chat_agent.py` | Max recent messages retained in standard chat context window. |
 | `CHAT_HISTORY_WINDOW_TIGHT` | Optional (default `8`) | `ticket_modules/chat/chat_agent.py` | Smaller fallback history window when token limits are hit. |
 | `CHAT_MSG_CHAR_LIMIT` | Optional (default `1400`) | `ticket_modules/chat/chat_agent.py` | Per-message character cap for user/assistant history passed to model. |

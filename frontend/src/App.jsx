@@ -489,9 +489,13 @@ function MCPToolsView({ jiraUrl = "" }) {
               </td>
               <td>{row.newRelicSampleCount ?? "-"}</td>
               <td>
-                <span className={`mcp-pill ${apiStatusTone(row.singleAvailResponseStatus)}`}>
-                  {row.singleAvailResponseStatus ?? "-"}
-                </span>
+                {row.singleAvailResponseStatus == null && row?.singleAvailExecution?.performed === false ? (
+                  <span className="mcp-pill neutral">Skipped</span>
+                ) : (
+                  <span className={`mcp-pill ${apiStatusTone(row.singleAvailResponseStatus)}`}>
+                    {row.singleAvailResponseStatus ?? "-"}
+                  </span>
+                )}
               </td>
               <td className="mcp-cell-ellipsis" title={row.error || "-"}>{row.error || "-"}</td>
             </tr>
@@ -566,7 +570,7 @@ function MCPToolsView({ jiraUrl = "" }) {
             </tbody>
           </table>
         </div>
-        {renderRawResponse(payload, "Raw Analyze Support Ticket response")}
+        {renderRawResponse(payload, "Raw Analyze Single Support Ticket response")}
       </div>
     );
   };
@@ -680,7 +684,7 @@ function MCPToolsView({ jiraUrl = "" }) {
               <option value="comment">Add Comment</option>
               <option value="assign">Assign Issue</option>
               <option value="link">Link Issues</option>
-              <option value="analyze">Analyze Support Ticket</option>
+              <option value="analyze">Analyze Single Support Ticket</option>
               <option value="analyze-bulk">Bulk Analyze (CRSUP Dry Run)</option>
             </select>
           </div>
@@ -1060,7 +1064,7 @@ function HowToView() {
         "Search Issues using JQL — raw Jira JQL query",
         "Search Issues using Keywords — phrase-based keyword search",
         "Create / Comment / Assign / Link",
-        "Analyze Support Ticket — single-ticket New Relic + payload analysis",
+        "Analyze Single Support Ticket — single-ticket New Relic + payload analysis",
         "Bulk Analyze (CRSUP Dry Run) — backend defaults for since/sample size",
       ],
       type: "ul",

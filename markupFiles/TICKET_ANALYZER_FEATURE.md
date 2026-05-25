@@ -30,6 +30,7 @@ Optional:
 - `EC2_SINGLEAVAIL_URL`
 - `EC2_BEARER_TOKEN`
 - `TICKET_ANALYSIS_KEYWORDS_FILE`
+- `ANALYZER_INCLUDE_COMMENTS` (default `false`; when `true`, indicator extraction also reads Jira comments)
 
 ## CLI Commands
 
