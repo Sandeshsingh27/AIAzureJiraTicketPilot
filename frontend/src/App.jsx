@@ -263,6 +263,8 @@ function MCPToolsView() {
 
   const [issueKey, setIssueKey] = useState("");
   const [jql, setJql] = useState("project=CRSUP AND status=Open");
+  const [conceptPhrases, setConceptPhrases] = useState("hotel unavailable, hotel not bookable");
+  const [conceptField, setConceptField] = useState("text");
   const [maxResults, setMaxResults] = useState(10);
   const [project, setProject] = useState("CRSUP");
   const [issueType, setIssueType] = useState("Task");
@@ -287,7 +289,11 @@ function MCPToolsView() {
       let data;
       if (tool === "get")      data = await postJson("/jira/get-issue", { issueKey });
       if (tool === "search")   data = await postJson("/jira/search", { jql, maxResults: +maxResults });
-      if (tool === "concept")  data = await postJson("/jira/search-concept", { phrases: jql.split(",").map(s=>s.trim()).filter(Boolean), field: "text", maxResults: +maxResults });
+      if (tool === "concept")  data = await postJson("/jira/search-concept", {
+        phrases: conceptPhrases.split(",").map((s) => s.trim()).filter(Boolean),
+        field: conceptField,
+        maxResults: +maxResults,
+      });
       if (tool === "create")   data = await postJson("/jira/create-issue", { project, summary, issueType, description });
       if (tool === "comment")  data = await postJson("/jira/add-comment", { issueKey, comment });
       if (tool === "assign")   data = await postJson("/jira/assign-issue", { issueKey, assignee });
@@ -321,8 +327,8 @@ function MCPToolsView() {
             <label>Tool</label>
             <select value={tool} onChange={(e) => setTool(e.target.value)}>
               <option value="get">Get Issue</option>
-              <option value="search">Search Issues (JQL)</option>
-              <option value="concept">Search Concept</option>
+              <option value="search">Search Issues using JQL</option>
+              <option value="concept">Search Issues using Keywords</option>
               <option value="create">Create Issue</option>
               <option value="comment">Add Comment</option>
               <option value="assign">Assign Issue</option>
@@ -339,12 +345,41 @@ function MCPToolsView() {
             </div>
           )}
 
-          {["search","concept"].includes(tool) && (
+          {tool === "search" && (
             <>
               <div className="field grow">
-                <label>{tool === "concept" ? "Phrases (comma-separated)" : "JQL"}</label>
-                <input value={jql} onChange={(e) => setJql(e.target.value)}
-                  placeholder={tool === "concept" ? "hotel unavailable, hotel not bookable" : "project=CRSUP AND status=Open"} />
+                <label>JQL</label>
+                <input
+                  value={jql}
+                  onChange={(e) => setJql(e.target.value)}
+                  placeholder="project=CRSUP AND status=Open"
+                />
+              </div>
+              <div className="field" style={{ maxWidth: 100 }}>
+                <label>Max</label>
+                <input type="number" value={maxResults} onChange={(e) => setMaxResults(e.target.value)} />
+              </div>
+            </>
+          )}
+
+          {tool === "concept" && (
+            <>
+              <div className="field grow">
+                <label>Keywords/Phrases (comma-separated)</label>
+                <input
+                  value={conceptPhrases}
+                  onChange={(e) => setConceptPhrases(e.target.value)}
+                  placeholder="hotel unavailable, hotel not bookable"
+                />
+              </div>
+              <div className="field" style={{ maxWidth: 170 }}>
+                <label>Field</label>
+                <select value={conceptField} onChange={(e) => setConceptField(e.target.value)}>
+                  <option value="text">text</option>
+                  <option value="summary">summary</option>
+                  <option value="description">description</option>
+                  <option value="comment">comment</option>
+                </select>
               </div>
               <div className="field" style={{ maxWidth: 100 }}>
                 <label>Max</label>
@@ -675,8 +710,8 @@ function HowToView() {
       title: "🔧 MCP Tools",
       items: [
         "Get Issue — fetch ticket by key",
-        "Search Issues — JQL query",
-        "Search Concept — phrase-based search",
+        "Search Issues using JQL — raw Jira JQL query",
+        "Search Issues using Keywords — phrase-based keyword search",
         "Create / Comment / Assign / Link",
         "Analyze Support Ticket — single-ticket New Relic + payload analysis",
         "Bulk Analyze (CRSUP Dry Run) — backend defaults for since/sample size",

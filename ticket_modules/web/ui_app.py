@@ -293,8 +293,8 @@ HTML = """
               style="background:#0f172a; border:1px solid #334155; color:#e2e8f0;
                      padding:11px 14px; border-radius:8px; font-size:.95rem; font-weight:600;">
         <option value="get">🔍 Get Issue</option>
-        <option value="search">🔎 Search Issues (JQL)</option>
-        <option value="concept">🧠 Search Concept</option>
+        <option value="search">🔎 Search Issues using JQL</option>
+        <option value="concept">🧠 Search Issues using Keywords</option>
         <option value="create">➕ Create Issue</option>
         <option value="comment">💬 Add Comment</option>
         <option value="assign">👤 Assign Issue</option>
@@ -332,10 +332,10 @@ HTML = """
       <button class="btn btn-blue" onclick="searchIssues()" style="padding:11px 28px; font-size:.95rem;">Search</button>
     </div>
 
-    <!-- Search Concept inputs -->
+    <!-- Search Issues using Keywords inputs -->
     <div class="jira-inputs" id="inputs-concept" style="display:none; flex:2; gap:12px; align-items:flex-end; flex-wrap:wrap;">
       <div style="display:flex; flex-direction:column; flex:2; min-width:300px;">
-        <label style="font-size:.82rem; color:#94a3b8; margin-bottom:6px;">Phrases (comma-separated)</label>
+        <label style="font-size:.82rem; color:#94a3b8; margin-bottom:6px;">Keywords (comma-separated)</label>
         <input type="text" id="sc-phrases" placeholder="hotel unavailable, hotel not available, property unavailable"
                style="background:#0f172a; border:1px solid #334155; color:#e2e8f0; padding:11px 14px; border-radius:8px; font-size:.95rem;"/>
       </div>
@@ -585,8 +585,8 @@ HTML = """
       <h3>🔧 Jira MCP Tools (UI)</h3>
       <ul>
         <li><b>Get Issue</b>: fetch ticket details by key.</li>
-        <li><b>Search Issues</b>: run raw JQL.</li>
-        <li><b>Search Concept</b>: phrase-based search (comma-separated variants).</li>
+        <li><b>Search Issues using JQL</b>: run raw JQL.</li>
+        <li><b>Search Issues using Keywords</b>: phrase-based search (comma-separated variants).</li>
         <li><b>Create / Comment / Assign / Link</b>: perform Jira actions directly.</li>
         <li><b>Analyze Support Ticket</b>: single-ticket Jira + New Relic + payload analysis.</li>
         <li><b>Bulk Analyze (CRSUP Dry Run)</b>: sample-based keyword analysis for CRSUP tickets.</li>
@@ -1187,7 +1187,7 @@ async function searchIssues() {
   else showResult('jira-result', data);
 }
 
-// ── Search Concept ─────────────────────────────────────────────
+// ── Search Issues using Keywords ───────────────────────────────
 async function searchConcept() {
   const raw = document.getElementById('sc-phrases').value.trim();
   const field = document.getElementById('sc-field').value;
@@ -1522,6 +1522,16 @@ def _jira_put(path, payload):
         return {"error": str(e)}, 500
 
 
+SEARCH_EXCLUDE_JQL = 'statusCategory != Done AND status not in ("Done", "Resolved")'
+
+
+def _append_search_exclusions(jql: str) -> str:
+    base = str(jql or "").strip()
+    if not base:
+        return SEARCH_EXCLUDE_JQL
+    return f"({base}) AND {SEARCH_EXCLUDE_JQL}"
+
+
 @app.route("/jira/get-issue", methods=["POST"])
 def jira_get_issue():
     key = (request.json or {}).get("issueKey", "")
@@ -1548,7 +1558,11 @@ def jira_search():
     body      = request.json or {}
     jql       = body.get("jql", "")
     max_res   = int(body.get("maxResults", 10))
-    payload   = {"jql": jql, "maxResults": max_res, "fields": ["summary","status","priority","assignee"]}
+    payload   = {
+        "jql": jql,
+        "maxResults": max_res,
+        "fields": ["summary", "status", "priority", "assignee"],
+    }
     data, code = _jira_post("/rest/api/2/search", payload)
     if "error" in data:
         return jsonify(data), code
@@ -1651,7 +1665,7 @@ def jira_search_concept():
 
     or_block = " OR ".join(f'{field} ~ "\\"{p}\\""' for p in clean)
     payload = {
-        "jql": f"({or_block})",
+        "jql": _append_search_exclusions(f"({or_block})"),
         "maxResults": max_res,
         "fields": ["summary", "status", "priority", "assignee"],
     }
