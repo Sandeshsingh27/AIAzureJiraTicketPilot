@@ -115,6 +115,8 @@ function ChatView() {
   const [history, setHistory] = useState([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [runningToolLabel, setRunningToolLabel] = useState("");
+  const [loaderTick, setLoaderTick] = useState(0);
   const [trace, setTrace] = useState([]);
   const [showTrace, setShowTrace] = useState(false);
   const [showPrompts, setShowPrompts] = useState(false);
@@ -138,10 +140,86 @@ function ChatView() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, sending]);
 
+  useEffect(() => {
+    if (!sending) {
+      setLoaderTick(0);
+      return;
+    }
+    const id = setInterval(() => setLoaderTick((t) => t + 1), 450);
+    return () => clearInterval(id);
+  }, [sending]);
+
+  const inferRunningToolLabel = (text) => {
+    const msg = String(text || "").toLowerCase();
+    if (!msg) return "Routing request to MCP tools...";
+    if (msg.includes("for these tickets") || msg.includes("bulk") || msg.includes("all tickets")) {
+      return "Running MCP tool: analyze_bulk_dry_run";
+    }
+    if (msg.includes("append request") || msg.includes("append response") || msg.includes("post analysis comment")) {
+      return "Running MCP tool: post_analysis_comment";
+    }
+    if (/(crsup|swpsup)-\d+/i.test(msg) && (msg.includes("analy") || msg.includes("new relic") || msg.includes("singleavail") || msg.includes("api"))) {
+      return "Running MCP tool: analyze_support_ticket";
+    }
+    if (msg.includes("search") || msg.includes("find") || msg.includes("similar") || msg.includes("related")) {
+      return "Running MCP tool: search_concept";
+    }
+    if (msg.includes("show") || msg.includes("details") || /(crsup|swpsup)-\d+/i.test(msg)) {
+      return "Running MCP tool: get_issue";
+    }
+    if (msg.includes("create") && msg.includes("ticket")) {
+      return "Running MCP tool: create_issue";
+    }
+    return "Routing request to MCP tools...";
+  };
+
+  const mcpStepsForTool = (toolLabel) => {
+    const lower = String(toolLabel || "").toLowerCase();
+    const generic = [
+      "Understand request",
+      "Route to MCP server",
+      "Run MCP tool",
+      "Format final response",
+    ];
+    if (lower.includes("analyze_bulk_dry_run")) {
+      return [
+        "Understand bulk request",
+        "Search matching CRSUP tickets",
+        "Analyze each ticket via MCP tools",
+        "Compile bulk dry-run report",
+      ];
+    }
+    if (lower.includes("analyze_support_ticket")) {
+      return [
+        "Read ticket context",
+        "Query New Relic logs",
+        "Build and run singleavail",
+        "Summarize analysis output",
+      ];
+    }
+    if (lower.includes("search_concept") || lower.includes("search_issues")) {
+      return [
+        "Understand search intent",
+        "Build Jira query",
+        "Run MCP search tool",
+        "Summarize matching tickets",
+      ];
+    }
+    return generic;
+  };
+
+  const loaderDots = ".".repeat((loaderTick % 3) + 1);
+  const mcpSteps = mcpStepsForTool(runningToolLabel);
+  // Move step highlight forward in order and hold at final step until response returns.
+  const activeStepIdx = mcpSteps.length
+    ? Math.min(mcpSteps.length - 1, Math.floor(loaderTick / 3))
+    : 0;
+
    const send = async (text) => {
     const msg = (text ?? input).trim();
     if (!msg || sending) return;
     setSending(true);
+    setRunningToolLabel(inferRunningToolLabel(msg));
     setMessages((p) => [...p, { role: "user", text: msg }]);
     setInput("");
     setShowPrompts(false);
@@ -155,6 +233,7 @@ function ChatView() {
       setMessages((p) => [...p, { role: "bot", text: `❌ ${err.message}` }]);
     } finally {
       setSending(false);
+      setRunningToolLabel("");
       setTimeout(() => textareaRef.current?.focus(), 50);
     }
   };
@@ -169,7 +248,7 @@ function ChatView() {
       <div className="chat-header">
         <span style={{ fontSize: "1.1rem" }}>💬</span>
         <h2>JiraAzureCopilot</h2>
-        <span className="header-badge">Jira + New Relic + Single Avail</span>
+        <span className="header-badge">Jira/Azure + New Relic + MCP Tools</span>
         <div style={{ flex: 1 }} />
         <button
           className="btn secondary"
@@ -202,7 +281,26 @@ function ChatView() {
             ))}
             {sending && (
               <div className="msg-row bot">
-                <div className="bubble bot thinking">JiraAzureCopilot is thinking…</div>
+                <div className="bubble bot thinking">
+                  <div className="tool-running-inline">
+                    <span className="loader-dot" />
+                    <div className="tool-running-stack">
+                      <span className="tool-running-title">JiraAzureCopilot is thinking{loaderDots}</span>
+                      <span className="tool-running-phase">MCP workflow in progress</span>
+                      <span className="tool-running-tool">{runningToolLabel || "Routing request to MCP tools..."}</span>
+                      <div className="tool-running-steps">
+                        {mcpSteps.map((step, idx) => {
+                          const state = idx < activeStepIdx ? "done" : idx === activeStepIdx ? "active" : "todo";
+                          return (
+                            <span key={`${step}-${idx}`} className={`tool-step ${state}`}>
+                              {idx + 1}. {step}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
           </>
