@@ -14,26 +14,33 @@ function useJiraUrl() {
 
 // ── Prompt library ────────────────────────────────────────────
 const PROMPT_LIBRARY = {
-  "Search & Discovery": [
-    "Find all open CRSUP tickets about Hotel Unavailable",
-    "Show details of CRSUP-4421",
-    "Find similar tickets to CRSUP-4421, create a parent ticket and link them all",
+  "Search & Investigate": [
+    "Find all open tickets about hotel unavailability",
+    "Show me tickets with payment failures",
+    "Search for price mismatch issues",
+    "What are similar issues to CRSUP-4421?",
   ],
   "Single Ticket Analysis": [
-    "Analyze support ticket CRSUP-4421 for hotel unavailable. Check New Relic logs from last 24 hours and build the singleavail payload.",
-    "Run end-to-end analysis for CRSUP-4421, include New Relic check, build payload, and execute the singleavail API call.",
+    "Analyze CRSUP-4421 for hotel unavailability",
+    "Run end-to-end analysis on CRSUP-4421 and check New Relic logs",
+    "Analyze CRSUP-4421 for hotel unbookable issues with singleavail payload",
   ],
-  "Bulk Dry Run Analysis (CRSUP)": [
-    "Run bulk dry-run analysis for CRSUP with safe defaults and executeApi false, enableJiraComment false.",
-    "/bulk-dry-run executeApi=true enableJiraComment=false extra keywords: hotel closed, property suspended",
+  "Bulk Analysis": [
+    "Run bulk analysis on CRSUP to find common hotel availability issues",
+    "Analyze multiple CRSUP tickets for hotel unavailability with keyword search",
+    "Do a bulk dry-run to check which tickets might have availability problems",
+  ],
+  "Consolidation & Linking": [
+    "Find all hotel unavailable tickets and create a parent ticket to link them",
+    "Create a master issue for payment failure tickets and link them together",
   ],
 };
 
 const QUICK_PILLS = [
-  "Find open CRSUP hotel unavailable tickets",
+  "Search for hotel unavailability tickets",
   "Analyze CRSUP-4421 for hotel unavailable",
-  "Bulk dry-run for CRSUP with safe defaults",
-  "Show details of CRSUP-4421",
+  "Bulk analysis of CRSUP for availability issues",
+  "Show CRSUP-4421 details",
 ];
 
 // ── API helper ────────────────────────────────────────────────
@@ -131,7 +138,7 @@ function ChatView() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, sending]);
 
-  const send = async (text) => {
+   const send = async (text) => {
     const msg = (text ?? input).trim();
     if (!msg || sending) return;
     setSending(true);
@@ -176,16 +183,16 @@ function ChatView() {
       {/* Messages */}
       <div className="chat-messages">
         {messages.length === 0 ? (
-          <div className="chat-welcome">
-            <div className="chat-welcome-logo">💬</div>
-            <h3>How can I help you today?</h3>
-            <p>Search Jira tickets, run hotel availability analysis, bulk dry-run CRSUP checks, and more.</p>
-            <div className="quick-pills">
-              {QUICK_PILLS.map((p) => (
-                <button key={p} className="quick-pill" onClick={() => send(p)}>{p}</button>
-              ))}
-            </div>
-          </div>
+           <div className="chat-welcome">
+             <div className="chat-welcome-logo">💬</div>
+             <h3>How can I help you today?</h3>
+             <p>Search tickets, analyze issues, run bulk dry-runs, consolidate tickets — just ask in plain language.</p>
+             <div className="quick-pills">
+               {QUICK_PILLS.map((p) => (
+                 <button key={p} className="quick-pill" onClick={() => send(p)}>{p}</button>
+               ))}
+             </div>
+           </div>
         ) : (
           <>
             {messages.map((m, i) => (

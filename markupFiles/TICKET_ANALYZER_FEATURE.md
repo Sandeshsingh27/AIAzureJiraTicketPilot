@@ -75,11 +75,15 @@ Go to:
 ## Bulk Analyze (CRSUP) Options
 
 - **Project**: fixed to `CRSUP`
-- **Since (h)**: New Relic lookback window
-- **Sample Size**: number of latest matching CRSUP tickets analyzed
 - **Extra Keywords**: optional comma-separated keywords merged with config keywords
 - **Execute API** (toggle): whether EC2 singleavail is called
 - **Enable Jira Comment Posting (CRSUP only)** (toggle): whether comments are actually posted
+
+Backend-controlled defaults (not entered in UI):
+
+- `BULK_DRY_RUN_SINCE_HOURS`
+- `BULK_DRY_RUN_SAMPLE_SIZE`
+- `SINGLE_ANALYZE_SINCE_HOURS`
 
 Helper note in UI:
 
@@ -92,6 +96,17 @@ For the bulk testing workflow:
 - You can keep both toggles OFF for safest testing
 - Jira comment preview is included in analysis output when available
 - Real posting only happens when comment posting toggle is enabled
+
+## AI Chat Behavior (Current)
+
+- Plain-language prompts are routed to tools automatically (`search_concept`, `search_issues`, `analyze_support_ticket`, `analyze_bulk_dry_run`).
+- Follow-up prompts like "for these tickets hit API, do not comment" stay in bulk mode and apply `executeApi=true`, `enableJiraComment=false`.
+- Analyzer replies in chat are deterministic and tool-grounded for single/bulk analysis to avoid contradictory summaries.
+- Bulk dry-run chat output includes full would-be Jira comment text by default.
+
+Optional chat env control:
+
+- `BULK_REPLY_COMMENT_PREVIEW_MAX_CHARS` (default `0` = no truncation)
 
 ## Ticket Keyword Config
 

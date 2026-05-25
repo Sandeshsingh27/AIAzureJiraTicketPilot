@@ -9,6 +9,9 @@ A comprehensive Jira automation system with AI-powered ticket routing and a Mode
 ✅ **Ticket Management** - Assign, comment, and manage Jira tickets automatically  
 ✅ **Team Coordination** - Route tickets to APAC or IMN teams based on content analysis  
 ✅ **Dry-Run Mode** - Preview changes before applying to Jira  
+✅ **Natural-Language AI Chat** - Route plain English requests to search/analyze/comment tools automatically  
+✅ **Deterministic Analysis Replies** - Single/bulk analyzer responses are generated from tool output to avoid vague/opposite summaries  
+✅ **Bulk Follow-Up Routing** - Follow-ups like "for these tickets hit API, do not comment" continue bulk workflow correctly  
 
 ## Project Structure
 
@@ -127,6 +130,7 @@ npm run dev
 
 React UI tabs:
 
+- `AI Chat`
 - `MCP Tools`
 - `Ticket Orchestrator`
 - `How To Use`
@@ -248,6 +252,19 @@ Analyze + execute EC2 call:
 
 ```text
 Run end-to-end analysis for CRSUP-4421, include New Relic check, build payload, and execute the singleavail API call.
+```
+
+Bulk dry-run and then execute API for matched tickets (no Jira comments):
+
+```text
+Check all CRSUP tickets about hotel unavailable and run dry-run analysis.
+Then for these tickets hit the API as well after fetching New Relic data, do not comment on Jira.
+```
+
+Append request/response in Jira using analyzer-standard formatting:
+
+```text
+For CRSUP-4421, post the analysis comment with request payload and response on Jira.
 ```
 
 ## Routing Rules

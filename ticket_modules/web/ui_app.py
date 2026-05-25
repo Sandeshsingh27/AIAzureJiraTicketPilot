@@ -1824,6 +1824,21 @@ def chat():
     body    = request.json or {}
     message = (body.get("message") or "").strip()
     history = body.get("history") or []
+    if not isinstance(history, list):
+        history = []
+    # Defensive sanitization: only keep user/assistant messages from client.
+    sanitized_history = []
+    for item in history[-30:]:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip().lower()
+        if role not in {"user", "assistant"}:
+            continue
+        sanitized_history.append({
+            "role": role,
+            "content": str(item.get("content") or ""),
+        })
+    history = sanitized_history
     if not message:
         return jsonify({"error": "empty message"}), 400
     try:

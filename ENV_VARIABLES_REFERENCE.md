@@ -44,6 +44,13 @@ This document explains every key in `.env.example`, where it is used, and why it
 | `BULK_DRY_RUN_SINCE_HOURS` | Optional (default `24`) | `ticket_modules/web/ui_app.py`, `ticket_modules/chat/chat_agent.py` | Backend lookback window for CRSUP bulk dry-run analysis. |
 | `BULK_DRY_RUN_SAMPLE_SIZE` | Optional (default `3`) | `ticket_modules/web/ui_app.py`, `ticket_modules/chat/chat_agent.py` | Backend ticket count limit for CRSUP bulk dry-run analysis (clamped to 1-10). |
 | `SINGLE_ANALYZE_SINCE_HOURS` | Optional (default `24`) | `ticket_modules/web/ui_app.py`, `ticket_modules/chat/chat_agent.py` | Backend lookback window for single-ticket `Analyze Support Ticket` runs. |
+| `CHAT_HISTORY_WINDOW` | Optional (default `18`) | `ticket_modules/chat/chat_agent.py` | Max recent messages retained in standard chat context window. |
+| `CHAT_HISTORY_WINDOW_TIGHT` | Optional (default `8`) | `ticket_modules/chat/chat_agent.py` | Smaller fallback history window when token limits are hit. |
+| `CHAT_MSG_CHAR_LIMIT` | Optional (default `1400`) | `ticket_modules/chat/chat_agent.py` | Per-message character cap for user/assistant history passed to model. |
+| `CHAT_TOOL_CHAR_LIMIT` | Optional (default `2000`) | `ticket_modules/chat/chat_agent.py` | Per-tool-result character cap in normal mode. |
+| `CHAT_TOOL_CHAR_LIMIT_TIGHT` | Optional (default `900`) | `ticket_modules/chat/chat_agent.py` | Per-tool-result character cap in compact fallback mode. |
+| `CHAT_CLIENT_HISTORY_WINDOW` | Optional (default `20`) | `ticket_modules/chat/chat_agent.py` | Max user/assistant turns persisted back to client history. |
+| `BULK_REPLY_COMMENT_PREVIEW_MAX_CHARS` | Optional (default `0`) | `ticket_modules/chat/chat_agent.py` | Bulk chat reply preview cap for would-be Jira comments (`0` means no truncation). |
 
 ## Cleanup Performed
 

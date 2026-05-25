@@ -70,6 +70,69 @@ BULK_DRY_RUN_SINCE_HOURS = _int_env("BULK_DRY_RUN_SINCE_HOURS", 24, minimum=1, m
 BULK_DRY_RUN_SAMPLE_SIZE = _int_env("BULK_DRY_RUN_SAMPLE_SIZE", 3, minimum=1, maximum=10)
 SINGLE_ANALYZE_SINCE_HOURS = _int_env("SINGLE_ANALYZE_SINCE_HOURS", 24, minimum=1, maximum=240)
 
+# Keep model input below gpt-4o-mini request-body limits.
+CHAT_HISTORY_WINDOW = _int_env("CHAT_HISTORY_WINDOW", 18, minimum=4, maximum=40)
+CHAT_HISTORY_WINDOW_TIGHT = _int_env("CHAT_HISTORY_WINDOW_TIGHT", 8, minimum=2, maximum=20)
+CHAT_MSG_CHAR_LIMIT = _int_env("CHAT_MSG_CHAR_LIMIT", 1400, minimum=300, maximum=6000)
+CHAT_TOOL_CHAR_LIMIT = _int_env("CHAT_TOOL_CHAR_LIMIT", 2000, minimum=300, maximum=8000)
+CHAT_TOOL_CHAR_LIMIT_TIGHT = _int_env("CHAT_TOOL_CHAR_LIMIT_TIGHT", 900, minimum=200, maximum=4000)
+CHAT_CLIENT_HISTORY_WINDOW = _int_env("CHAT_CLIENT_HISTORY_WINDOW", 20, minimum=6, maximum=50)
+# 0 means no truncation in bulk reply previews.
+BULK_REPLY_COMMENT_PREVIEW_MAX_CHARS = _int_env("BULK_REPLY_COMMENT_PREVIEW_MAX_CHARS", 0, minimum=0, maximum=200000)
+
+
+def _clip_text(value, limit: int) -> str:
+    text = str(value or "")
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "\n...[truncated]"
+
+
+def _compact_history_for_model(history: list, *, tight: bool = False) -> list:
+    """Keep only useful, bounded messages before sending to the model."""
+    if not isinstance(history, list):
+        return []
+
+    window = CHAT_HISTORY_WINDOW_TIGHT if tight else CHAT_HISTORY_WINDOW
+    char_limit = max(300, CHAT_MSG_CHAR_LIMIT // (2 if tight else 1))
+    cleaned = []
+
+    for raw in history[-window:]:
+        if not isinstance(raw, dict):
+            continue
+        role = str(raw.get("role") or "").strip().lower()
+        if role not in {"user", "assistant"}:
+            continue
+
+        cleaned.append({
+            "role": role,
+            "content": _clip_text(raw.get("content", ""), char_limit),
+        })
+
+    return cleaned
+
+
+def _history_for_client(messages: list) -> list:
+    """Return compact user/assistant history to prevent unbounded growth across turns."""
+    out = []
+    for m in messages:
+        role = m.get("role")
+        if role not in {"user", "assistant"}:
+            continue
+        if role == "assistant" and not str(m.get("content") or "").strip():
+            # Skip assistant tool-call placeholders (empty text) in persisted history.
+            continue
+        out.append({
+            "role": role,
+            "content": _clip_text(m.get("content", ""), CHAT_MSG_CHAR_LIMIT),
+        })
+    return out[-CHAT_CLIENT_HISTORY_WINDOW:]
+
+
+def _is_token_limit_error(exc: Exception) -> bool:
+    text = str(exc or "").lower()
+    return "tokens_limit_reached" in text or ("request body too large" in text and "token" in text)
+
 
 def _load_availability_keywords() -> list[str]:
     defaults = ["hotel not available", "hotel unavailable", "hotel not bookable"]
@@ -125,6 +188,12 @@ SYSTEM_PROMPT = (
     "like 'all open P1 tickets' that don't need phrase matching. "
     "For end-to-end hotel-unavailable or hotel-not-bookable investigations (Jira context + New Relic checks + singleavail payload), "
     "use the `analyze_support_ticket` tool. "
+    "If the user asks for bulk operations over previously listed tickets (e.g. 'for these tickets hit API', "
+    "'run for all above tickets', 'do not comment on Jira'), use `analyze_bulk_dry_run` and keep comment posting aligned with user intent. "
+    "In particular: 'do not comment' means enableJiraComment=false. "
+    "IMPORTANT: If user asks to post Jira comments containing request/response payloads or API output, "
+    "DO NOT draft free-form comment text and DO NOT use placeholders like '{...}'. "
+    "Always call `analyze_support_ticket` with enableJiraComment=true (or `post_analysis_comment`) so backend posts the standard structured comment format used by MCP single/bulk analysis. "
     "\n"
     "When you DO use raw `search_issues` with text/summary searches, the same rules apply: "
     "use the escaped-quote exact-phrase form `text ~ \"\\\"hotel unavailable\\\"\"`. "
@@ -287,8 +356,43 @@ def tool_create_issue(project: str, summary: str, issueType: str = "Task",
 def tool_add_comment(issueKey: str, comment: str):
     if not _key_is_allowed(issueKey):
         return {"error": f"Refused: {issueKey} is outside allowed projects {ALLOWED_PROJECTS}."}
+    lower = str(comment or "").lower()
+    # Guard against placeholder-style comments; use analyzer-backed commenting for payload/response posts.
+    if "{...}" in str(comment or "") or ("request payload" in lower and "response" in lower):
+        return {
+            "error": (
+                "Refused placeholder analysis comment. Use analyze_support_ticket(issueKey, "
+                "executeApi=true/false, enableJiraComment=true) or post_analysis_comment so Jira gets "
+                "the standard formatted request/response comment."
+            )
+        }
     data = _jira_post(f"/rest/api/2/issue/{issueKey}/comment", {"body": comment})
     return {"id": data.get("id"), "issueKey": issueKey, "status": "added"}
+
+
+def tool_post_analysis_comment(issueKey: str, executeApi: bool = True):
+    """Post the standard analyzer-formatted Jira comment (payload + response) for a single ticket."""
+    if not _key_is_allowed(issueKey):
+        return {"error": f"Refused: {issueKey} is outside allowed projects {ALLOWED_PROJECTS}."}
+    try:
+        result = run_support_ticket_analysis(
+            issue_key=issueKey,
+            since_hours=SINGLE_ANALYZE_SINCE_HOURS,
+            execute_api=bool(executeApi),
+            output_path=None,
+            comment_jira=True,
+            preview_jira_comment=True,
+        )
+        return {
+            "issueKey": issueKey,
+            "executeApi": bool(executeApi),
+            "jiraComment": result.get("jiraComment"),
+            "singleAvailExecution": result.get("singleAvailExecution"),
+            "singleAvailResponse": result.get("singleAvailResponse"),
+            "note": "Comment posted via support analyzer formatter (same style as single/bulk MCP analysis).",
+        }
+    except Exception as e:
+        return {"error": str(e)}
 
 def tool_assign_issue(issueKey: str, assignee: str):
     """Assign (or re-assign) a Jira issue to a user by their Jira username."""
@@ -515,11 +619,68 @@ def _build_bulk_dry_run_reply(result: dict, args: dict) -> str:
         )
         preview = item.get("wouldCommentPreview")
         if preview:
-            preview_text = str(preview).strip().replace("\n", " ")
-            if len(preview_text) > 220:
-                preview_text = preview_text[:220] + "..."
-            lines.append(f"  would-be Jira comment: {preview_text}")
+            preview_text = str(preview).strip()
+            if BULK_REPLY_COMMENT_PREVIEW_MAX_CHARS > 0 and len(preview_text) > BULK_REPLY_COMMENT_PREVIEW_MAX_CHARS:
+                preview_text = preview_text[:BULK_REPLY_COMMENT_PREVIEW_MAX_CHARS] + "\n...[truncated]"
+            lines.append("  would-be Jira comment:")
+            lines.append(preview_text)
 
+    return "\n".join(lines)
+
+
+def _build_support_ticket_reply(result: dict, args: dict) -> str:
+    """Generate a factual response for analyze_support_ticket from tool output only."""
+    if not isinstance(result, dict):
+        return "Support ticket analysis finished, but returned an unexpected payload shape."
+    if result.get("error"):
+        return f"Support ticket analysis failed: {result.get('error')}"
+
+    ticket = result.get("ticket") or {}
+    key = ticket.get("key") or args.get("issueKey") or "(unknown ticket)"
+    summary = ticket.get("summary") or "-"
+    nr = ((result.get("newRelic") or {}).get("summary") or {})
+    nr_sample_count = (result.get("newRelic") or {}).get("sampleCount")
+    execution = result.get("singleAvailExecution") or {}
+    jira_comment = result.get("jiraComment") or {}
+    api = result.get("singleAvailResponse") or {}
+    indicators = result.get("indicators") or {}
+
+    lines = [
+        f"Analysis completed for {key}.",
+        f"Summary: {summary}",
+        "",
+        "New Relic:",
+        f"- Matched: {nr.get('matched')}",
+        f"- Successful: {nr.get('successful')}",
+        f"- Sample count: {nr_sample_count}",
+    ]
+    if nr.get("skipReason"):
+        lines.append(f"- Skip reason: {nr.get('skipReason')}")
+
+    lines.extend([
+        "",
+        "SingleAvail execution:",
+        f"- Requested: {execution.get('requested')}",
+        f"- Performed: {execution.get('performed')}",
+        f"- Reason: {execution.get('reason') or 'n/a'}",
+    ])
+    if api:
+        lines.append(f"- Response status: {api.get('statusCode')}")
+
+    lines.extend([
+        "",
+        "Jira comment:",
+        f"- Posting enabled: {bool(args.get('enableJiraComment'))}",
+        f"- Posted: {jira_comment.get('posted')}",
+        f"- Reason: {jira_comment.get('reason') or 'n/a'}",
+        "",
+        "Extracted core fields:",
+        f"- hrCode: {indicators.get('hrCode')}",
+        f"- hKey: {indicators.get('hKey')}",
+        f"- chainId: {indicators.get('chainId')}",
+        f"- customerKey: {indicators.get('customerKey')}",
+        f"- companyKey: {indicators.get('companyKey')}",
+    ])
     return "\n".join(lines)
 
 
@@ -528,6 +689,7 @@ TOOL_FNS = {
     "search_concept": tool_search_concept,
     "analyze_support_ticket": tool_analyze_support_ticket,
     "analyze_bulk_dry_run": tool_analyze_bulk_dry_run,
+    "post_analysis_comment": tool_post_analysis_comment,
     "get_issue":      tool_get_issue,
     "create_issue":   tool_create_issue,
     "add_comment":    tool_add_comment,
@@ -584,6 +746,95 @@ def _extract_bulk_dry_run_args(user_message: str) -> dict | None:
         args["extraKeywords"] = parts
 
     return args
+
+
+def _extract_bulk_followup_args(user_message: str, history: list | None) -> dict | None:
+    """Detect follow-up commands that should continue prior bulk-ticket workflow."""
+    text = (user_message or "").strip()
+    lower = text.lower()
+    if not lower:
+        return None
+
+    refers_previous_batch = any(
+        token in lower
+        for token in (
+            "for these tickets",
+            "for above tickets",
+            "for all these tickets",
+            "for the tickets",
+            "those tickets",
+            "all matched tickets",
+        )
+    )
+    asks_bulk_run = any(
+        token in lower
+        for token in (
+            "bulk",
+            "all tickets",
+            "all the tickets",
+            "all crsup",
+        )
+    )
+
+    if not (refers_previous_batch or asks_bulk_run):
+        return None
+
+    # Confirm there was a prior bulk context in recent conversation.
+    recent = "\n".join(
+        str((m or {}).get("content", ""))
+        for m in (history or [])[-8:]
+        if isinstance(m, dict)
+    ).lower()
+    has_bulk_context = any(
+        token in recent
+        for token in (
+            "bulk",
+            "dry-run",
+            "tickets analyzed",
+            "tickets matched",
+            "picked (sample)",
+            "crsup",
+        )
+    )
+    if not has_bulk_context and not asks_bulk_run:
+        return None
+
+    execute_api = any(
+        token in lower
+        for token in (
+            "hit the api",
+            "execute api",
+            "run api",
+            "call the api",
+            "perform api",
+        )
+    )
+    no_comment = any(
+        token in lower
+        for token in (
+            "do not comment",
+            "don't comment",
+            "no comment",
+            "without comment",
+            "disable comment",
+            "comment off",
+        )
+    )
+    yes_comment = any(
+        token in lower
+        for token in (
+            "comment on jira",
+            "add comment",
+            "post comment",
+            "enable comment",
+        )
+    ) and not no_comment
+
+    return {
+        "extraKeywords": [],
+        "executeApi": bool(execute_api),
+        "enableJiraComment": bool(yes_comment),
+    }
 
 TOOLS_SCHEMA = [
     {
@@ -656,7 +907,8 @@ TOOLS_SCHEMA = [
                 "Run end-to-end support ticket analysis for 'hotel unavailable' issues: "
                 "(also applicable to 'hotel not bookable' issues) "
                 "extract context from Jira issue text, query New Relic logs, and build singleavail payload. "
-                "Optionally execute EC2 singleavail call when executeApi=true and post comment with payload+response when enableJiraComment=true."
+                "Optionally execute EC2 singleavail call when executeApi=true and post comment with payload+response when enableJiraComment=true. "
+                "Use this when user asks to append request/response to Jira in the standard analysis comment format."
             ),
             "parameters": {
                 "type": "object",
@@ -689,6 +941,25 @@ TOOLS_SCHEMA = [
                     "executeApi": {"type": "boolean", "default": False, "description": "Whether to execute EC2 singleavail API"},
                     "enableJiraComment": {"type": "boolean", "default": False, "description": "Whether to post Jira comments on analyzed tickets"},
                 },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "post_analysis_comment",
+            "description": (
+                "Post the standard analyzer-formatted Jira comment with request payload + response body for one ticket. "
+                "This matches the same comment style used by single/bulk MCP analysis. "
+                "Use this instead of generic add_comment for analysis outputs."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "issueKey": {"type": "string", "description": "Jira issue key e.g. CRSUP-4421"},
+                    "executeApi": {"type": "boolean", "default": True, "description": "Whether to execute singleavail before commenting"},
+                },
+                "required": ["issueKey"],
             },
         },
     },
@@ -742,7 +1013,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "add_comment",
-            "description": "Add a comment to an existing Jira issue.",
+            "description": "Add a plain/manual comment to an existing Jira issue. Do NOT use for payload/response analysis comments.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -785,6 +1056,8 @@ def run_chat(history: list, user_message: str, max_steps: int = 8):
     Returns: { reply: str, history: [...], tool_trace: [...] }
     """
     direct_bulk_args = _extract_bulk_dry_run_args(user_message)
+    if direct_bulk_args is None:
+        direct_bulk_args = _extract_bulk_followup_args(user_message, history)
     if direct_bulk_args is not None:
         result = tool_analyze_bulk_dry_run(**direct_bulk_args)
         reply = _build_bulk_dry_run_reply(result, direct_bulk_args)
@@ -798,21 +1071,37 @@ def run_chat(history: list, user_message: str, max_steps: int = 8):
             "tool_trace": [{"tool": "analyze_bulk_dry_run", "args": direct_bulk_args, "result": result}],
         }
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + (history or []) + [
-        {"role": "user", "content": user_message}
+    compact_mode = False
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + _compact_history_for_model(history or []) + [
+        {"role": "user", "content": _clip_text(user_message, CHAT_MSG_CHAR_LIMIT)}
     ]
     tool_trace = []
     # Guard: track keys created this turn so create_issue is never called twice
     _created_this_turn: list = []
 
     for _ in range(max_steps):
-        resp = _client.chat.completions.create(
-            model=_MODEL,
-            temperature=0.2,
-            messages=messages,
-            tools=TOOLS_SCHEMA,
-            tool_choice="auto",
-        )
+        try:
+            resp = _client.chat.completions.create(
+                model=_MODEL,
+                temperature=0.2,
+                messages=messages,
+                tools=TOOLS_SCHEMA,
+                tool_choice="auto",
+            )
+        except Exception as exc:
+            if _is_token_limit_error(exc) and not compact_mode:
+                compact_mode = True
+                messages = [{"role": "system", "content": SYSTEM_PROMPT}] + _compact_history_for_model(
+                    history or [], tight=True
+                ) + [{"role": "user", "content": _clip_text(user_message, max(300, CHAT_MSG_CHAR_LIMIT // 2))}]
+                continue
+            if _is_token_limit_error(exc):
+                return {
+                    "reply": "Your request history is too large for the current model. I trimmed context as much as possible. Please start a new chat or resend with less prior context.",
+                    "history": _history_for_client(messages),
+                    "tool_trace": tool_trace,
+                }
+            raise
         msg = resp.choices[0].message
         # Convert message to dict for storage
         messages.append({
@@ -831,11 +1120,18 @@ def run_chat(history: list, user_message: str, max_steps: int = 8):
             # final assistant reply
             return {
                 "reply":      msg.content or "(no response)",
-                "history":    [m for m in messages if m["role"] != "system"],
+                "history":    _history_for_client(messages),
                 "tool_trace": tool_trace,
             }
 
         # execute each tool call
+        direct_reply = None
+        analyzed_result = None
+        analyzed_args = None
+        bulk_result = None
+        bulk_args = None
+        comment_post_result = None
+        comment_post_args = None
         for tc in msg.tool_calls:
             name = tc.function.name
             try:
@@ -866,12 +1162,50 @@ def run_chat(history: list, user_message: str, max_steps: int = 8):
                 "role":         "tool",
                 "tool_call_id": tc.id,
                 "name":         name,
-                "content":      json.dumps(result)[:6000],
+                "content":      _clip_text(json.dumps(result, ensure_ascii=True), CHAT_TOOL_CHAR_LIMIT_TIGHT if compact_mode else CHAT_TOOL_CHAR_LIMIT),
             })
+
+            # Capture high-signal tool outputs for deterministic reply generation.
+            if name == "analyze_support_ticket":
+                analyzed_result = result
+                analyzed_args = args
+            elif name == "analyze_bulk_dry_run":
+                bulk_result = result
+                bulk_args = args
+            elif name == "post_analysis_comment":
+                comment_post_result = result
+                comment_post_args = args
+
+        # Prefer deterministic summaries for analyzer-related tools, even when mixed with other tools.
+        if bulk_result is not None:
+            direct_reply = _build_bulk_dry_run_reply(bulk_result, bulk_args or {})
+        elif analyzed_result is not None:
+            direct_reply = _build_support_ticket_reply(analyzed_result, analyzed_args or {})
+        elif comment_post_result is not None:
+            if comment_post_result.get("error"):
+                direct_reply = (
+                    f"Posting analysis comment failed for {(comment_post_args or {}).get('issueKey')}: "
+                    f"{comment_post_result.get('error')}"
+                )
+            else:
+                jc = comment_post_result.get("jiraComment") or {}
+                direct_reply = (
+                    f"Posted analyzer-formatted Jira comment for "
+                    f"{comment_post_result.get('issueKey') or (comment_post_args or {}).get('issueKey')}. "
+                    f"posted={jc.get('posted')}, reason={jc.get('reason') or 'n/a'}"
+                )
+
+        if direct_reply:
+            messages.append({"role": "assistant", "content": direct_reply})
+            return {
+                "reply": direct_reply,
+                "history": _history_for_client(messages),
+                "tool_trace": tool_trace,
+            }
 
     return {
         "reply":      "Reached max steps without completing. Please rephrase or break the task into smaller steps.",
-        "history":    [m for m in messages if m["role"] != "system"],
+        "history":    _history_for_client(messages),
         "tool_trace": tool_trace,
     }
 

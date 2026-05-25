@@ -45,6 +45,15 @@ Flow:
 
 ## MCP tools and JSON payloads
 
+### AI chat tool routing (current)
+
+- Natural-language topical search -> `search_concept`
+- Explicit/structured JQL search -> `search_issues`
+- Single ticket Jira+NewRelic+singleavail analysis -> `analyze_support_ticket`
+- CRSUP bulk dry-run analysis -> `analyze_bulk_dry_run`
+- Post standardized analyzer comment (payload + response) -> `post_analysis_comment`
+- Plain/manual Jira comment -> `add_comment`
+
 ### `get_issue` / `fetch_jira_issue`
 
 ```json
@@ -59,6 +68,45 @@ Flow:
 {
   "jql": "project=CRSUP AND status=Open",
   "maxResults": 10
+}
+```
+
+### `search_concept`
+
+```json
+{
+  "phrases": ["hotel unavailable", "hotel not available", "property unavailable"],
+  "field": "text",
+  "maxResults": 20
+}
+```
+
+### `analyze_support_ticket`
+
+```json
+{
+  "issueKey": "CRSUP-4421",
+  "executeApi": true,
+  "enableJiraComment": false
+}
+```
+
+### `analyze_bulk_dry_run`
+
+```json
+{
+  "executeApi": true,
+  "enableJiraComment": false,
+  "extraKeywords": []
+}
+```
+
+### `post_analysis_comment`
+
+```json
+{
+  "issueKey": "CRSUP-4421",
+  "executeApi": true
 }
 ```
 
