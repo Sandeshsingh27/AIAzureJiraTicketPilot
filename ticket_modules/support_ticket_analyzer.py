@@ -14,6 +14,7 @@ import argparse
 import json
 import os
 import re
+import tempfile
 from urllib.parse import urlparse
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional
@@ -987,6 +988,52 @@ def add_jira_comment(issue_key: str, jira_url: str, jira_pat: str, comment: str)
     }
 
 
+def upload_jira_attachment(
+    issue_key: str,
+    jira_url: str,
+    jira_pat: str,
+    file_path: str,
+    filename: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Upload file as Jira issue attachment."""
+    url = f"{jira_url.rstrip('/')}/rest/api/2/issue/{issue_key}/attachments"
+    headers = {
+        "Authorization": f"Bearer {jira_pat}",
+        "Accept": "application/json",
+        "X-Atlassian-Token": "no-check",
+    }
+    actual_name = filename or os.path.basename(file_path)
+    with open(file_path, "rb") as fh:
+        files = {"file": (actual_name, fh, "application/json")}
+        response = requests.post(url, headers=headers, files=files, timeout=60)
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        detail: Any
+        try:
+            detail = response.json()
+        except Exception:
+            detail = response.text
+        raise RuntimeError(
+            f"Jira attachment upload failed with status {response.status_code}: {detail}"
+        ) from exc
+
+    payload: Any
+    try:
+        payload = response.json()
+    except Exception:
+        payload = response.text
+    attachment_count = len(payload) if isinstance(payload, list) else None
+    return {
+        "attempted": True,
+        "uploaded": True,
+        "statusCode": response.status_code,
+        "filename": actual_name,
+        "attachmentCountFromResponse": attachment_count,
+        "response": payload,
+    }
+
+
 def _normalize_comment_text(value: Any) -> str:
     text = _adf_to_text(value).strip().lower()
     return re.sub(r"\s+", " ", text)
@@ -1019,6 +1066,31 @@ def verify_jira_comment(issue_key: str, jira_url: str, jira_pat: str, comment: s
     }
 
 
+def jira_attachment_exists(issue: Dict[str, Any], filename: str) -> bool:
+    if not filename:
+        return False
+    attachments = _safe_get(issue, "fields.attachment") or []
+    if not isinstance(attachments, list):
+        return False
+    target = str(filename).strip().lower()
+    for item in attachments:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("filename") or "").strip().lower()
+        if name == target:
+            return True
+    return False
+
+
+def verify_jira_attachment(issue_key: str, jira_url: str, jira_pat: str, filename: str) -> Dict[str, Any]:
+    refreshed_issue = fetch_jira_issue(issue_key=issue_key, jira_url=jira_url, jira_pat=jira_pat)
+    attachments = _safe_get(refreshed_issue, "fields.attachment") or []
+    return {
+        "verifiedOnRefresh": jira_attachment_exists(refreshed_issue, filename),
+        "attachmentCount": len(attachments) if isinstance(attachments, list) else None,
+    }
+
+
 def _normalize_jsonish_for_comment(value: Any) -> Any:
     if value is None:
         return None
@@ -1044,6 +1116,17 @@ def _serialize_for_comment(value: Any) -> str:
         return json.dumps(normalized, indent=2, ensure_ascii=False)
     except Exception:
         return str(normalized)
+
+
+def _jira_attachment_link(filename: str, label: Optional[str] = None) -> str:
+    """Return Jira wiki markup for an issue attachment link."""
+    name = str(filename or "").strip()
+    if not name:
+        return ""
+    text = str(label or "").strip()
+    if text:
+        return f"[{text}|^{name}]"
+    return f"[^{name}]"
 
 
 def _split_text_into_chunks(text: str, max_length: int) -> List[str]:
@@ -1073,16 +1156,12 @@ def _split_text_into_chunks(text: str, max_length: int) -> List[str]:
     return chunks
 
 
-def build_open_status_jira_comments(payload: Dict[str, Any], api_result: Dict[str, Any]) -> List[str]:
+def build_open_status_jira_comments(
+    payload: Dict[str, Any],
+    attachment_note: Optional[str] = None,
+) -> List[str]:
     payload_json = _serialize_for_comment({"singleAvailPayload": payload})
-    response_payload = {
-        "singleAvailResponse": {
-            "statusCode": api_result.get("statusCode"),
-            "ok": api_result.get("ok"),
-            "body": _normalize_jsonish_for_comment(api_result.get("body")),
-        }
-    }
-    response_json = _serialize_for_comment(response_payload)
+    note = attachment_note or "SingleAvail response JSON is attached to this ticket as a file."
 
     comment = (
         "Hi Team,\n\n"
@@ -1091,18 +1170,17 @@ def build_open_status_jira_comments(payload: Dict[str, Any], api_result: Dict[st
         f"{payload_json}\n"
         "{code}\n\n"
         "Tester UI: http://crsui.pec.hrs.cc:4202/tester\n"
-        "Use the above request payload to see the response.\n\n"
-        "{code:json}\n"
-        f"{response_json}\n"
-        "{code}\n\n"
+        "Use the above request payload to see the response.\n"
+        f"{note}\n\n"
         "Regards,\n"
-        "Ticket Orchestrator"
+        "JiraAzureCopilot"
     )
 
     if len(comment) > MAX_JIRA_COMMENT_CHARS:
-        # Keep one tidy comment by trimming the response body if Jira size limits are exceeded.
-        response_payload["singleAvailResponse"]["body"] = "[truncated: response body exceeds Jira comment limit]"
-        response_json = _serialize_for_comment(response_payload)
+        # Keep one tidy comment by trimming payload block when Jira size limits are exceeded.
+        payload_json = _serialize_for_comment(
+            {"singleAvailPayload": "[truncated: payload exceeds Jira comment limit]"}
+        )
         comment = (
             "Hi Team,\n\n"
             "SingleAvail response indicates status OPEN for this request. The hotel is available/bookable.\n\n"
@@ -1110,10 +1188,8 @@ def build_open_status_jira_comments(payload: Dict[str, Any], api_result: Dict[st
             f"{payload_json}\n"
             "{code}\n\n"
             "Tester UI: http://crsui.pec.hrs.cc:4202/tester\n"
-            "Use the above request payload to see the response.\n\n"
-            "{code:json}\n"
-            f"{response_json}\n"
-            "{code}\n\n"
+            "Use the above request payload to see the response.\n"
+            f"{note}\n\n"
             "Regards,\n"
             "JiraAzureCopilot"
         )
@@ -1463,7 +1539,10 @@ def run(
         if api_result.get("ok") and _singleavail_has_open_status(api_result.get("body")):
             if not comment_jira:
                 if preview_jira_comment:
-                    comments = build_open_status_jira_comments(payload=payload, api_result=api_result)
+                    comments = build_open_status_jira_comments(
+                        payload=payload,
+                        attachment_note="SingleAvail response JSON will be attached when Jira comment posting is enabled.",
+                    )
                     jira_comment_result = {
                         "attempted": False,
                         "posted": False,
@@ -1480,13 +1559,91 @@ def run(
                         "reason": "Jira comment flow disabled for this run",
                     }
             else:
-                comments = build_open_status_jira_comments(payload=payload, api_result=api_result)
+                attachment_result: Dict[str, Any] = {
+                    "attempted": False,
+                    "uploaded": False,
+                    "reason": "response attachment upload not attempted",
+                }
+                attachment_note = "SingleAvail response JSON upload is pending for this ticket."
+
+                # Store response to temp JSON and upload as Jira attachment.
+                timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+                attachment_filename = f"singleavail-response-{issue_key}-{timestamp}.json"
+                response_attachment_payload = {
+                    "singleAvailResponse": {
+                        "statusCode": api_result.get("statusCode"),
+                        "ok": api_result.get("ok"),
+                        "body": _normalize_jsonish_for_comment(api_result.get("body")),
+                    }
+                }
+                temp_path: Optional[str] = None
+                try:
+                    with tempfile.NamedTemporaryFile(
+                        mode="w", encoding="utf-8", suffix=".json", delete=False
+                    ) as tmp:
+                        temp_path = tmp.name
+                        tmp.write(_serialize_for_comment(response_attachment_payload))
+                    attachment_result = upload_jira_attachment(
+                        issue_key=issue_key,
+                        jira_url=jira_url,
+                        jira_pat=jira_pat,
+                        file_path=temp_path,
+                        filename=attachment_filename,
+                    )
+                    try:
+                        verification = verify_jira_attachment(
+                            issue_key=issue_key,
+                            jira_url=jira_url,
+                            jira_pat=jira_pat,
+                            filename=attachment_filename,
+                        )
+                    except Exception as verify_exc:
+                        verification = {
+                            "verifiedOnRefresh": False,
+                            "verificationError": str(verify_exc),
+                        }
+                    attachment_result["verification"] = verification
+                    if verification.get("verifiedOnRefresh"):
+                        attachment_link = _jira_attachment_link(
+                            attachment_filename,
+                            label="SingleAvailResponse.json",
+                        )
+                        attachment_note = (
+                            f"SingleAvail response JSON is attached to this ticket. {attachment_link}"
+                        )
+                    else:
+                        attachment_result["uploaded"] = False
+                        attachment_result["reason"] = "attachment upload could not be verified on Jira refresh"
+                        attachment_note = (
+                            f"SingleAvail response attachment upload was attempted for `{attachment_filename}`, "
+                            "but Jira did not confirm the file on refresh."
+                        )
+                except Exception as exc:
+                    attachment_result = {
+                        "attempted": True,
+                        "uploaded": False,
+                        "error": str(exc),
+                        "filename": attachment_filename,
+                    }
+                    attachment_note = (
+                        "SingleAvail response attachment upload failed in this run. "
+                        "Please re-run to upload response JSON."
+                    )
+                finally:
+                    if temp_path and os.path.exists(temp_path):
+                        try:
+                            os.remove(temp_path)
+                        except Exception:
+                            pass
+
+                comments = build_open_status_jira_comments(payload=payload, attachment_note=attachment_note)
                 if len(comments) == 1 and jira_comment_exists(issue, comments[0]):
                     jira_comment_result = {
                         "attempted": False,
                         "posted": False,
                         "reason": "duplicate OPEN-status EC2 response comment already exists",
                         "comment": comments[0],
+                        "attachment": attachment_result,
                     }
                 else:
                     try:
@@ -1497,12 +1654,14 @@ def run(
                             issue=issue,
                             comments=comments,
                         )
+                        jira_comment_result["attachment"] = attachment_result
                     except Exception as exc:
                         jira_comment_result = {
                             "attempted": True,
                             "posted": False,
                             "error": str(exc),
                             "comments": comments,
+                            "attachment": attachment_result,
                         }
         elif execute_api:
             jira_comment_result = {

@@ -501,6 +501,76 @@ function MCPToolsView({ jiraUrl = "" }) {
     </div>
   );
 
+  const renderRawResponse = (payload, title = "Raw response") => (
+    <section className="raw-response-section">
+      <div className="raw-response-head">
+        <div className="raw-response-title">Advanced / Raw payload</div>
+        <div className="raw-response-subtitle">Use this section for full backend output and debugging details.</div>
+      </div>
+      <details className="raw-response-wrap">
+        <summary>{title}</summary>
+        <pre className="result-box raw-response-box">{JSON.stringify(payload, null, 2)}</pre>
+      </details>
+    </section>
+  );
+
+  const renderAnalyzeSupportTable = (payload) => {
+    const ticket = payload?.ticket || {};
+    const newRelic = payload?.newRelic || {};
+    const execution = payload?.singleAvailExecution || {};
+    const jiraComment = payload?.jiraComment || {};
+    const attachment = jiraComment.attachment || {};
+
+    const analyzedOk = !payload?.error;
+    const apiStatus = payload?.singleAvailResponse?.statusCode;
+
+    return (
+      <div className="mcp-result-wrap">
+        <div className="mcp-meta-row">
+          <span>NR Samples: {newRelic.sampleCount ?? 0}</span>
+          <span>API Status: {payload?.singleAvailResponse?.statusCode ?? "-"}</span>
+          <span>Comment Posted: {jiraComment.posted ? "Yes" : "No"}</span>
+          <span>Attachment Uploaded: {attachment.uploaded ? "Yes" : "No"}</span>
+        </div>
+        <div className="table-wrap">
+          <table className="results-table mcp-results-table analysis-summary-table">
+            <thead>
+              <tr>
+                <th>Ticket</th>
+                <th>Summary</th>
+                <th>Analyzed</th>
+                <th>NR Samples</th>
+                <th>API Status</th>
+                <th>Comment</th>
+                <th>Attachment</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>{ticket.key ? <TicketLink ticketKey={ticket.key} jiraUrl={jiraUrl} /> : "-"}</td>
+                <td className="mcp-cell-ellipsis" title={ticket.summary || "-"}>{ticket.summary || "-"}</td>
+                <td>
+                  <span className={`mcp-pill ${analyzedOk ? "ok" : "danger"}`}>{analyzedOk ? "Yes" : "No"}</span>
+                </td>
+                <td>{newRelic.sampleCount ?? 0}</td>
+                <td>
+                  <span className={`mcp-pill ${apiStatusTone(apiStatus)}`}>{apiStatus ?? "-"}</span>
+                </td>
+                <td>
+                  <span className={`mcp-pill ${jiraComment.posted ? "ok" : "neutral"}`}>{jiraComment.posted ? "Posted" : "Not Posted"}</span>
+                </td>
+                <td>
+                  <span className={`mcp-pill ${attachment.uploaded ? "ok" : "neutral"}`}>{attachment.uploaded ? "Uploaded" : "No"}</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        {renderRawResponse(payload, "Raw Analyze Support Ticket response")}
+      </div>
+    );
+  };
+
   const renderResult = () => {
     if (resultData == null) return <pre className="result-box">{resultText}</pre>;
 
@@ -534,8 +604,13 @@ function MCPToolsView({ jiraUrl = "" }) {
             {resultData.sinceHoursConfigured != null && <span>Since Hours: {resultData.sinceHoursConfigured}</span>}
           </div>
           {renderBulkTable(bulkRows)}
+          {renderRawResponse(resultData, "Raw Bulk Analyze response")}
         </div>
       );
+    }
+
+    if (resultData && typeof resultData === "object" && resultData.ticket && resultData.indicators && resultData.newRelic) {
+      return renderAnalyzeSupportTable(resultData);
     }
 
     if (resultData && typeof resultData === "object" && resultData.key) {
