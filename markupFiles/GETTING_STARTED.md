@@ -1,4 +1,4 @@
-# Ticket Orchestrator - Getting Started
+# JiraAzureCopilot - Getting Started
 
 This guide replaces multiple setup/checklist docs and gives you a single path to get running quickly.
 

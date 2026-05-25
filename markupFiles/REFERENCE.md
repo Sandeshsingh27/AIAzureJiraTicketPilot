@@ -1,4 +1,4 @@
-# Ticket Orchestrator - Reference
+# JiraAzureCopilot - Reference
 
 This file consolidates architecture, routing behavior, MCP tool payloads, and command reference.
 

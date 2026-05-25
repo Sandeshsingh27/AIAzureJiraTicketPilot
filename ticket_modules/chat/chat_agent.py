@@ -71,7 +71,7 @@ def _load_availability_keywords() -> list[str]:
     return out or defaults
 
 SYSTEM_PROMPT = (
-    "You are JiraCopilot — a helpful assistant scoped to the Jira projects "
+    "You are JiraAzureCopilot — a helpful assistant scoped to the Jira projects "
     f"{', '.join(ALLOWED_PROJECTS)} only. "
     "Use the provided tools to search, fetch, create, comment on, and link Jira issues. "
     f"All JQL searches MUST include `{_PROJECT_CLAUSE}` (the backend also enforces this). "
@@ -361,7 +361,7 @@ def tool_search_concept(phrases: list, field: str = "text",
     }
 
 
-def tool_analyze_support_ticket(issueKey: str, sinceHours: int = 24, executeApi: bool = False):
+def tool_analyze_support_ticket(issueKey: str, sinceHours: int = 24, executeApi: bool = False, enableJiraComment: bool = False):
     """Run support-ticket analyzer for hotel unavailable/not-bookable investigations."""
     if not _key_is_allowed(issueKey):
         return {"error": f"Refused: {issueKey} is outside allowed projects {ALLOWED_PROJECTS}."}
@@ -371,6 +371,8 @@ def tool_analyze_support_ticket(issueKey: str, sinceHours: int = 24, executeApi:
             since_hours=int(sinceHours),
             execute_api=bool(executeApi),
             output_path=None,
+            comment_jira=bool(enableJiraComment),
+            preview_jira_comment=True,
         )
         return result
     except Exception as e:
@@ -652,7 +654,7 @@ TOOLS_SCHEMA = [
                 "Run end-to-end support ticket analysis for 'hotel unavailable' issues: "
                 "(also applicable to 'hotel not bookable' issues) "
                 "extract context from Jira issue text, query New Relic logs, and build singleavail payload. "
-                "Optionally execute EC2 singleavail call when executeApi=true."
+                "Optionally execute EC2 singleavail call when executeApi=true and post comment with payload+response when enableJiraComment=true."
             ),
             "parameters": {
                 "type": "object",
@@ -660,6 +662,7 @@ TOOLS_SCHEMA = [
                     "issueKey":   {"type": "string", "description": "Jira issue key e.g. CRSUP-4421"},
                     "sinceHours": {"type": "integer", "default": 24, "description": "Lookback window in hours"},
                     "executeApi": {"type": "boolean", "default": False, "description": "Whether to call EC2 singleavail endpoint"},
+                    "enableJiraComment": {"type": "boolean", "default": False, "description": "Whether to post singleavail payload and response as Jira comment"},
                 },
                 "required": ["issueKey"],
             },

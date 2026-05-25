@@ -1115,7 +1115,7 @@ def build_open_status_jira_comments(payload: Dict[str, Any], api_result: Dict[st
             f"{response_json}\n"
             "{code}\n\n"
             "Regards,\n"
-            "Ticket Orchestrator"
+            "JiraAzureCopilot"
         )
 
     return [comment]
@@ -1279,13 +1279,13 @@ def _build_missing_fields_jira_comment(missing_core_fields: List[str]) -> str:
     missing_lines = "\n".join(f"- {item}" for item in missing_core_fields)
     return (
         "Hi Team,\n\n"
-        "Ticket Orchestrator could not run reliable New Relic analysis because core filtering fields are missing.\n\n"
+        "JiraAzureCopilot could not run reliable New Relic analysis because core filtering fields are missing.\n\n"
         "Please update the ticket description/comments with these fields:\n"
         f"{missing_lines}\n\n"
         "(arrivalDate/departureDate/museId/bookingSource alone are not sufficient for this workflow.)\n\n"
         "Once added, re-run analysis.\n\n"
         "Regards,\n"
-        "Ticket Orchestrator"
+        "JiraAzureCopilot"
     )
 
 

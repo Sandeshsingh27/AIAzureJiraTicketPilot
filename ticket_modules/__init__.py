@@ -1,2 +1,2 @@
-"""Ticket Orchestrator modular package."""
+"""JiraAzureCopilot modular package with ticket orchestration support."""
 

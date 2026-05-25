@@ -1,9 +1,9 @@
-# Ticket Orchestrator MCP - Startup Script (PowerShell)
+# JiraAzureCopilot MCP - Startup Script (PowerShell)
 # Windows PowerShell script to setup and run the project
 
 Write-Host ""
 Write-Host "======================================" -ForegroundColor Cyan
-Write-Host "Ticket Orchestrator MCP Startup" -ForegroundColor Cyan
+Write-Host "JiraAzureCopilot MCP Startup" -ForegroundColor Cyan
 Write-Host "======================================" -ForegroundColor Cyan
 Write-Host ""
 

@@ -1,5 +1,5 @@
 """
-AI Ticket Orchestrator
+JiraAzureCopilot - Ticket Orchestration Engine
 
 Flow:
   1. Pull open Jira tickets assigned to IDD/CRS team members.

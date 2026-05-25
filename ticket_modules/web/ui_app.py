@@ -1,10 +1,10 @@
 """
-TicketOrchestrator Web UI
+JiraAzureCopilot Web UI
 --------------------------
 Runs on http://localhost:5000
 
 Tabs:
-  1. Ticket Orchestrator  – run ticket_orchestrator.py and stream output
+  1. Ticket Orchestration  – JiraAzureCopilot ticket orchestration engine
   2. Jira MCP Tools       – Get Issue, Search Issues, Create Issue, Add Comment
 """
 import os
@@ -204,7 +204,7 @@ HTML = """
     <button class="btn btn-gray"  onclick="clearOutput()">🗑 Clear</button>
     <span id="orch-status" class="status-badge status-idle">Idle</span>
   </div>
-  <div id="orch-output">Ready. Click ▶ Run to start the Ticket Orchestrator...</div>
+  <div id="orch-output">Ready. Click ▶ Run to start JiraAzureCopilot ticket orchestration...</div>
 
   <!-- Results (hidden until run completes) -->
   <div id="results-section" style="display:none;">
@@ -485,7 +485,7 @@ HTML = """
     <!-- Header / examples -->
     <div style="padding:14px 18px; border-bottom:1px solid #334155; display:flex;
                 gap:10px; align-items:center; flex-wrap:wrap;">
-      <span style="color:#38bdf8; font-weight:700; font-size:1rem;">💬 JiraCopilot</span>
+      <span style="color:#38bdf8; font-weight:700; font-size:1rem;">💬 JiraAzureCopilot</span>
       <span style="color:#64748b; font-size:.8rem;">— Ask naturally or use prompt library below for common workflows.</span>
       <div style="flex:1;"></div>
       <button class="btn btn-gray" onclick="resetChat()" style="padding:6px 14px; font-size:.8rem;">🗑 New Chat</button>
@@ -534,7 +534,7 @@ HTML = """
                                    display:flex; flex-direction:column; gap:14px;">
       <div class="chat-msg chat-bot">
         <div class="chat-bubble">
-          👋 Hi! I'm JiraCopilot. You can use the example prompts section above, or try:
+          👋 Hi! I'm JiraAzureCopilot. You can use the example prompts section above, or try:
           <ul style="margin:8px 0 0 18px; color:#94a3b8;">
             <li>"Find all open CRSUP tickets about Hotel Unavailable"</li>
             <li>"Show details of CRSUP-4421"</li>
@@ -557,7 +557,7 @@ HTML = """
 
     <!-- Input bar -->
     <div style="padding:14px 18px; border-top:1px solid #334155; display:flex; gap:10px;">
-      <textarea id="chat-input" rows="2" placeholder="Ask JiraCopilot anything..."
+      <textarea id="chat-input" rows="2" placeholder="Ask JiraAzureCopilot anything..."
                 onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault(); sendChat();}"
                 style="flex:1; background:#0f172a; border:1px solid #334155; color:#e2e8f0;
                        padding:11px 14px; border-radius:8px; font-size:.92rem; resize:none;
@@ -573,11 +573,11 @@ HTML = """
   <div class="help-grid">
     <div class="help-card">
       <h3>🚀 Quick Start</h3>
-      <ol>
-        <li>Use <code>🔧 Jira MCP Tools</code> when you want direct UI actions and structured inputs.</li>
-        <li>Use <code>💬 AI Chat</code> when you want natural-language workflows, prompt templates, and dry-run chat commands.</li>
-        <li>Use <code>🤖 Ticket Orchestrator</code> for routing and reassignment workflows.</li>
-      </ol>
+       <ol>
+         <li>Use <code>🔧 Jira MCP Tools</code> when you want direct UI actions and structured inputs.</li>
+         <li>Use <code>💬 AI Chat</code> when you want natural-language workflows, prompt templates, and dry-run chat commands.</li>
+         <li>Use <code>🤖 JiraAzureCopilot</code> for ticket orchestration, routing and reassignment workflows.</li>
+       </ol>
     </div>
     <div class="help-card">
       <h3>🔧 Jira MCP Tools (UI)</h3>
@@ -702,7 +702,7 @@ function switchJiraTool() {
   res.innerHTML = '<span style="color:#64748b;">Result will appear here after running a tool…</span>';
 }
 
-// ── AI Chat (JiraCopilot) ─────────────────────────────────────
+// ── AI Chat (JiraAzureCopilot) ─────────────────────────────────────
 let chatHistory = [];
 const PROMPT_LIBRARY = {
   'Search & Discovery': [
@@ -756,7 +756,7 @@ function showTyping() {
   const wrap = document.createElement('div');
   wrap.className = 'chat-msg chat-bot';
   wrap.id = 'chat-typing-wrap';
-  wrap.innerHTML = '<div class="chat-bubble chat-typing">JiraCopilot is thinking</div>';
+  wrap.innerHTML = '<div class="chat-bubble chat-typing">JiraAzureCopilot is thinking</div>';
   box.appendChild(wrap);
   box.scrollTop = box.scrollHeight;
 }
@@ -1679,6 +1679,7 @@ def jira_analyze_support_ticket():
     issue_key = str(body.get("issueKey") or "").strip()
     since_hours = int(body.get("sinceHours", 24))
     execute_api = bool(body.get("executeApi", False))
+    enable_jira_comment = bool(body.get("enableJiraComment", False))
     if not issue_key:
         return jsonify({"error": "issueKey is required"}), 400
     try:
@@ -1687,6 +1688,8 @@ def jira_analyze_support_ticket():
             since_hours=since_hours,
             execute_api=execute_api,
             output_path=None,
+            comment_jira=enable_jira_comment,
+            preview_jira_comment=True,
         )
         return jsonify(result)
     except Exception as e:
@@ -1797,7 +1800,7 @@ def jira_analyze_bulk_dry_run():
     })
 
 
-# ─── AI Chat (JiraCopilot) ───────────────────────────────────────────────────
+# ─── AI Chat (JiraAzureCopilot) ───────────────────────────────────────────────────
 
 @app.route("/chat", methods=["POST"])
 def chat():
@@ -1818,6 +1821,6 @@ def chat():
 # ─── Entry point ─────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    print("🎫  TicketOrchestrator UI  →  http://localhost:5000")
+    print("🎫  JiraAzureCopilot UI  →  http://localhost:5000")
     app.run(debug=True, port=5000, threaded=True)
 

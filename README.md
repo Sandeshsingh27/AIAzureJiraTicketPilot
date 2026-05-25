@@ -20,7 +20,7 @@ A comprehensive Jira automation system with AI-powered ticket routing and a Mode
 │   │   ├── jira_connect.py             # Jira connectivity helper
 │   │   └── azure_devops_connect.py     # Azure DevOps integration
 │   ├── chat/
-│   │   └── chat_agent.py               # JiraCopilot chat logic
+│   │   └── chat_agent.py               # JiraAzureCopilot chat logic
 │   └── web/
 │       └── ui_app.py                   # Flask web UI
 ├── ticket_orchestrator.py              # Backward-compatible entrypoint

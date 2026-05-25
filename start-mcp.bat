@@ -1,12 +1,12 @@
 @echo off
-REM Ticket Orchestrator MCP - Startup Script
+REM JiraAzureCopilot MCP - Startup Script
 REM Windows batch script to setup and run the project
 
 setlocal enabledelayedexpansion
 
 echo.
 echo ======================================
-echo Ticket Orchestrator MCP Startup
+echo JiraAzureCopilot MCP Startup
 echo ======================================
 echo.
 

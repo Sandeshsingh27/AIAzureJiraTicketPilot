@@ -1,9 +1,9 @@
-# TicketOrchestrator React UI
+# JiraAzureCopilot React UI
 
 This is a React (Vite) UI workspace with a ChatGPT-style layout and left sidebar tabs:
 
 - MCP Tools
-- Ticket Orchestrator
+- JiraAzureCopilot (Ticket Orchestration)
 - How To Use
 
 It is designed to work with the existing Flask backend (`ui_app.py`) on port `5000`.

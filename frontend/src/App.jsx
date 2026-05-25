@@ -52,7 +52,7 @@ async function postJson(path, body) {
 const NAV = [
   { id: "chat",        icon: "💬", label: "AI Chat" },
   { id: "mcp",         icon: "🔧", label: "MCP Tools" },
-  { id: "orchestrator",icon: "🤖", label: "Ticket Orchestrator" },
+  { id: "orchestrator",icon: "🤖", label: "JiraAzureCopilot" },
   { id: "howto",       icon: "📘", label: "How To Use" },
 ];
 
@@ -161,7 +161,7 @@ function ChatView() {
       {/* Header */}
       <div className="chat-header">
         <span style={{ fontSize: "1.1rem" }}>💬</span>
-        <h2>JiraCopilot</h2>
+        <h2>JiraAzureCopilot</h2>
         <span className="header-badge">Jira + New Relic + Single Avail</span>
         <div style={{ flex: 1 }} />
         <button
@@ -195,7 +195,7 @@ function ChatView() {
             ))}
             {sending && (
               <div className="msg-row bot">
-                <div className="bubble bot thinking">JiraCopilot is thinking…</div>
+                <div className="bubble bot thinking">JiraAzureCopilot is thinking…</div>
               </div>
             )}
           </>
@@ -273,9 +273,10 @@ function MCPToolsView() {
   const [inward, setInward] = useState("");
   const [outward, setOutward] = useState("");
   const [linkType, setLinkType] = useState("Relates");
-  const [anHours, setAnHours] = useState(24);
-  const [anExec, setAnExec] = useState(false);
-  const [running, setRunning] = useState(false);
+   const [anHours, setAnHours] = useState(24);
+   const [anExec, setAnExec] = useState(false);
+   const [anComment, setAnComment] = useState(false);
+   const [running, setRunning] = useState(false);
 
   const runTool = async () => {
     setRunning(true);
@@ -289,7 +290,7 @@ function MCPToolsView() {
       if (tool === "comment")  data = await postJson("/jira/add-comment", { issueKey, comment });
       if (tool === "assign")   data = await postJson("/jira/assign-issue", { issueKey, assignee });
       if (tool === "link")     data = await postJson("/jira/link-issues", { inwardIssue: inward, outwardIssue: outward, linkType });
-      if (tool === "analyze")  data = await postJson("/jira/analyze-support-ticket", { issueKey, sinceHours: +anHours, executeApi: anExec });
+       if (tool === "analyze")  data = await postJson("/jira/analyze-support-ticket", { issueKey, sinceHours: +anHours, executeApi: anExec, enableJiraComment: anComment });
       setResult(JSON.stringify(data, null, 2));
     } catch (err) {
       setResult(`Error: ${err.message}`);
@@ -366,20 +367,26 @@ function MCPToolsView() {
             </>
           )}
 
-          {tool === "analyze" && (
-            <>
-              <div className="field" style={{ maxWidth: 120 }}>
-                <label>Since (hours)</label>
-                <input type="number" value={anHours} onChange={(e) => setAnHours(e.target.value)} />
-              </div>
-              <div className="field" style={{ justifyContent: "flex-end" }}>
-                <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <input type="checkbox" checked={anExec} onChange={(e) => setAnExec(e.target.checked)} />
-                  Execute API
-                </label>
-              </div>
-            </>
-          )}
+           {tool === "analyze" && (
+             <>
+               <div className="field" style={{ maxWidth: 120 }}>
+                 <label>Since (hours)</label>
+                 <input type="number" value={anHours} onChange={(e) => setAnHours(e.target.value)} />
+               </div>
+               <div className="field" style={{ justifyContent: "flex-end" }}>
+                 <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                   <input type="checkbox" checked={anExec} onChange={(e) => setAnExec(e.target.checked)} />
+                   Execute API
+                 </label>
+               </div>
+               <div className="field" style={{ justifyContent: "flex-end" }}>
+                 <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                   <input type="checkbox" checked={anComment} onChange={(e) => setAnComment(e.target.checked)} />
+                   Post Comment
+                 </label>
+               </div>
+             </>
+           )}
         </div>
 
         <div className="toolbar">
