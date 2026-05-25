@@ -604,6 +604,88 @@ textarea {
 
 .output { min-height: 200px; }
 
+.mcp-result-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mcp-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.mcp-meta-row span {
+  background: #eef2ff;
+  border: 1px solid #dbe3ff;
+  border-radius: 999px;
+  color: #334155;
+  font-size: 0.73rem;
+  font-weight: 600;
+  padding: 3px 9px;
+}
+
+.mcp-results-table tbody tr:nth-child(even) td {
+  background: #fbfdff;
+}
+
+.mcp-results-table tbody tr:hover td {
+  background: #eef6ff;
+}
+
+.mcp-col-idx {
+  width: 42px;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.mcp-cell-ellipsis {
+  max-width: 340px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mcp-pill {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  border: 1px solid transparent;
+}
+
+.mcp-pill.neutral {
+  background: #f1f5f9;
+  color: #334155;
+  border-color: #dbe4ee;
+}
+
+.mcp-pill.info {
+  background: #dbeafe;
+  color: #1e40af;
+  border-color: #bfdbfe;
+}
+
+.mcp-pill.ok {
+  background: #dcfce7;
+  color: #166534;
+  border-color: #bbf7d0;
+}
+
+.mcp-pill.warn {
+  background: #fef3c7;
+  color: #92400e;
+  border-color: #fde68a;
+}
+
+.mcp-pill.danger {
+  background: #fee2e2;
+  color: #991b1b;
+  border-color: #fecaca;
+}
+
 .empty-box {
   background: #f8fafc;
   border: 1px dashed var(--border);

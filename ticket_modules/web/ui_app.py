@@ -1534,7 +1534,9 @@ def _append_search_exclusions(jql: str) -> str:
 
 @app.route("/jira/get-issue", methods=["POST"])
 def jira_get_issue():
-    key = (request.json or {}).get("issueKey", "")
+    key = str((request.json or {}).get("issueKey", "")).strip()
+    if not key:
+        return jsonify({"error": "Issue key/ticket number is required."}), 400
     data, code = _jira_get(f"/rest/api/2/issue/{key}")
     if "error" in data:
         return jsonify(data), code

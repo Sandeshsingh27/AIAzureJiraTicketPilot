@@ -257,9 +257,10 @@ function ChatView() {
 }
 
 // ── MCP Tools view ────────────────────────────────────────────
-function MCPToolsView() {
+function MCPToolsView({ jiraUrl = "" }) {
   const [tool, setTool] = useState("get");
-  const [result, setResult] = useState("Result will appear here after running a tool.");
+  const [resultData, setResultData] = useState(null);
+  const [resultText, setResultText] = useState("Result will appear here after running a tool.");
 
   const [issueKey, setIssueKey] = useState("");
   const [jql, setJql] = useState("project=CRSUP AND status=Open");
@@ -282,10 +283,175 @@ function MCPToolsView() {
   const [abComment, setAbComment] = useState(false);
   const [running, setRunning] = useState(false);
 
+  const rowsFromIssueArray = (payload) => {
+    if (!Array.isArray(payload)) return null;
+    const rows = payload.filter((item) => item && typeof item === "object" && item.key);
+    return rows.length ? rows : null;
+  };
+
+  const rowsFromIssueObject = (payload) => {
+    if (!payload || typeof payload !== "object") return null;
+    if (!Array.isArray(payload.issues)) return null;
+    const rows = payload.issues.filter((item) => item && typeof item === "object" && item.key);
+    return rows.length ? rows : null;
+  };
+
+  const rowsFromBulkResults = (payload) => {
+    if (!payload || typeof payload !== "object" || !Array.isArray(payload.results)) return null;
+    const rows = payload.results.filter((item) => item && typeof item === "object" && item.issueKey);
+    return rows.length ? rows : null;
+  };
+
+  const priorityTone = (priority) => {
+    const p = String(priority || "").toLowerCase();
+    if (p.includes("blocker") || p.includes("critical") || p === "p1") return "danger";
+    if (p.includes("high") || p === "p2") return "warn";
+    if (p.includes("medium") || p === "p3") return "info";
+    if (p.includes("low") || p.includes("minor") || p === "p4") return "ok";
+    return "neutral";
+  };
+
+  const statusTone = (status) => {
+    const s = String(status || "").toLowerCase();
+    if (s.includes("done") || s.includes("resolved") || s.includes("closed")) return "ok";
+    if (s.includes("progress") || s.includes("review") || s.includes("open") || s.includes("todo")) return "info";
+    return "neutral";
+  };
+
+  const apiStatusTone = (statusCode) => {
+    const n = Number(statusCode);
+    if (Number.isNaN(n)) return "neutral";
+    if (n >= 200 && n < 300) return "ok";
+    if (n >= 400) return "danger";
+    return "warn";
+  };
+
+  const renderIssuesTable = (rows) => (
+    <div className="table-wrap">
+      <table className="results-table mcp-results-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Ticket</th>
+            <th>Summary</th>
+            <th>Status</th>
+            <th>Priority</th>
+            <th>Assignee</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, idx) => (
+            <tr key={row.key}>
+              <td className="mcp-col-idx">{idx + 1}</td>
+              <td><TicketLink ticketKey={row.key} jiraUrl={jiraUrl} /></td>
+              <td className="mcp-cell-ellipsis" title={row.summary || "-"}>{row.summary || "-"}</td>
+              <td>
+                <span className={`mcp-pill ${statusTone(row.status)}`}>{row.status || "-"}</span>
+              </td>
+              <td>
+                <span className={`mcp-pill ${priorityTone(row.priority)}`}>{row.priority || "-"}</span>
+              </td>
+              <td>{row.assignee || "-"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  const renderBulkTable = (rows) => (
+    <div className="table-wrap">
+      <table className="results-table mcp-results-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Ticket</th>
+            <th>Summary</th>
+            <th>Analyzed</th>
+            <th>NR Samples</th>
+            <th>API Status</th>
+            <th>Error</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, idx) => (
+            <tr key={row.issueKey}>
+              <td className="mcp-col-idx">{idx + 1}</td>
+              <td><TicketLink ticketKey={row.issueKey} jiraUrl={jiraUrl} /></td>
+              <td className="mcp-cell-ellipsis" title={row.summary || "-"}>{row.summary || "-"}</td>
+              <td>
+                <span className={`mcp-pill ${row.analyzed ? "ok" : "danger"}`}>{row.analyzed ? "Yes" : "No"}</span>
+              </td>
+              <td>{row.newRelicSampleCount ?? "-"}</td>
+              <td>
+                <span className={`mcp-pill ${apiStatusTone(row.singleAvailResponseStatus)}`}>
+                  {row.singleAvailResponseStatus ?? "-"}
+                </span>
+              </td>
+              <td className="mcp-cell-ellipsis" title={row.error || "-"}>{row.error || "-"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  const renderResult = () => {
+    if (resultData == null) return <pre className="result-box">{resultText}</pre>;
+
+    const issueRows = rowsFromIssueArray(resultData) || rowsFromIssueObject(resultData);
+    if (issueRows) {
+      return (
+        <div className="mcp-result-wrap">
+          {Array.isArray(resultData?.issues) && (
+            <div className="mcp-meta-row">
+              <span>Count: {resultData.count ?? issueRows.length}</span>
+              {resultData.effective_jql && <span>Effective JQL: {resultData.effective_jql}</span>}
+            </div>
+          )}
+          {!Array.isArray(resultData?.issues) && (
+            <div className="mcp-meta-row">
+              <span>Count: {issueRows.length}</span>
+            </div>
+          )}
+          {renderIssuesTable(issueRows)}
+        </div>
+      );
+    }
+
+    const bulkRows = rowsFromBulkResults(resultData);
+    if (bulkRows) {
+      return (
+        <div className="mcp-result-wrap">
+          <div className="mcp-meta-row">
+            <span>Matched: {resultData.ticketsMatched ?? bulkRows.length}</span>
+            {resultData.sampleSizeConfigured != null && <span>Sample Size: {resultData.sampleSizeConfigured}</span>}
+            {resultData.sinceHoursConfigured != null && <span>Since Hours: {resultData.sinceHoursConfigured}</span>}
+          </div>
+          {renderBulkTable(bulkRows)}
+        </div>
+      );
+    }
+
+    if (resultData && typeof resultData === "object" && resultData.key) {
+      return (
+        <div className="mcp-result-wrap">
+          {renderIssuesTable([resultData])}
+        </div>
+      );
+    }
+
+    return <pre className="result-box">{JSON.stringify(resultData, null, 2)}</pre>;
+  };
+
   const runTool = async () => {
     setRunning(true);
-    setResult("Running…");
+    setResultData(null);
+    setResultText("Running…");
     try {
+      if (tool === "get" && !issueKey.trim()) {
+        throw new Error("Issue key/ticket number is required.");
+      }
       let data;
       if (tool === "get")      data = await postJson("/jira/get-issue", { issueKey });
       if (tool === "search")   data = await postJson("/jira/search", { jql, maxResults: +maxResults });
@@ -307,9 +473,10 @@ function MCPToolsView() {
           enableJiraComment: abComment,
         });
       }
-      setResult(JSON.stringify(data, null, 2));
+      setResultData(data);
     } catch (err) {
-      setResult(`Error: ${err.message}`);
+      setResultData(null);
+      setResultText(`Error: ${err.message}`);
     } finally {
       setRunning(false);
     }
@@ -466,7 +633,7 @@ function MCPToolsView() {
           </button>
         </div>
 
-        <pre className="result-box">{result}</pre>
+        {renderResult()}
       </div>
     </div>
   );
@@ -780,7 +947,7 @@ export default function App() {
 
   const view = {
     chat: <ChatView />,
-    mcp: <MCPToolsView />,
+    mcp: <MCPToolsView jiraUrl={jiraUrl} />,
     orchestrator: <OrchestratorView jiraUrl={jiraUrl} />,
     howto: <HowToView />,
   }[tab] ?? <ChatView />;
