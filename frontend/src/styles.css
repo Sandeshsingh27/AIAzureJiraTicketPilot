@@ -950,6 +950,164 @@ textarea {
   color: var(--brand);
 }
 
+/* ── Markdown renderer (chat bot bubbles) ───────────────────── */
+.bubble.bot.md-mode {
+  max-width: 96%;
+  white-space: normal;
+  padding: 14px 16px;
+}
+
+.md-render {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.88rem;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.md-h3 {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--brand);
+  padding-bottom: 6px;
+  border-bottom: 2px solid var(--brand-light);
+  margin-bottom: 2px;
+}
+
+.md-h4 {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #374151;
+  letter-spacing: 0.01em;
+  margin-top: 6px;
+  margin-bottom: 2px;
+}
+
+.md-p {
+  margin: 1px 0;
+  line-height: 1.5;
+}
+
+.md-ul {
+  padding-left: 18px;
+  margin: 2px 0;
+}
+
+.md-ul li { margin: 2px 0; }
+
+.md-blockquote {
+  border-left: 3px solid #f59e0b;
+  background: #fffbeb;
+  padding: 7px 12px;
+  border-radius: 0 8px 8px 0;
+  font-size: 0.84rem;
+  color: #78350f;
+  font-style: italic;
+}
+
+.md-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+}
+
+.md-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+  min-width: 420px;
+}
+
+.md-table th {
+  background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+  color: #4b5563;
+  font-weight: 700;
+  padding: 8px 11px;
+  text-align: left;
+  border-bottom: 2px solid #e2e8f0;
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.md-table td {
+  padding: 7px 11px;
+  border-bottom: 1px solid #f0f4f8;
+  vertical-align: middle;
+  line-height: 1.4;
+}
+
+.md-table tbody tr:nth-child(even) td {
+  background: #fafbfd;
+}
+
+.md-table tbody tr:hover td {
+  background: #eef6ff;
+  transition: background 0.1s;
+}
+
+/* ── Status pills auto-detected in md cells ── */
+.md-cell-ok    { color: #065f46; font-weight: 600; }
+.md-cell-warn  { color: #92400e; font-weight: 600; }
+.md-cell-err   { color: #991b1b; font-weight: 600; }
+.md-cell-muted { color: #64748b; }
+
+.inline-code {
+  background: #f0f4ff;
+  border: 1px solid #c7d6ff;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-family: "Consolas", "Fira Code", monospace;
+  font-size: 0.81em;
+  color: #4f46e5;
+}
+
+/* Outcome summary table — special accent first-col */
+.md-table td:first-child:has(> strong) {
+  min-width: 110px;
+}
+
+/* ── Summary stat cards inside markdown ── */
+.md-stat-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 4px 0;
+}
+
+.md-stat-card {
+  flex: 1;
+  min-width: 130px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.md-stat-card .stat-label {
+  font-size: 0.7rem;
+  color: var(--muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.md-stat-card .stat-value {
+  font-size: 1.15rem;
+  font-weight: 800;
+  color: var(--text);
+}
+
 @media (max-width: 900px) {
   .app-shell { grid-template-columns: var(--sidebar-w) 1fr; }
   .split { grid-template-columns: 1fr; }

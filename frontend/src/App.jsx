@@ -276,7 +276,11 @@ function ChatView() {
           <>
             {messages.map((m, i) => (
               <div key={i} className={`msg-row ${m.role}`}>
-                <div className={`bubble ${m.role}`}>{m.text}</div>
+                <div className={`bubble ${m.role}${m.role === "bot" && hasMarkdown(m.text) ? " md-mode" : ""}`}>
+                  {m.role === "bot" && hasMarkdown(m.text)
+                    ? <MarkdownBubble text={m.text} />
+                    : m.text}
+                </div>
               </div>
             ))}
             {sending && (
@@ -821,6 +825,128 @@ function MCPToolsView({ jiraUrl = "" }) {
       </div>
     </div>
   );
+}
+
+// ── Lightweight markdown renderer ────────────────────────────
+
+/** Render inline **bold** and `code` tokens inside a string. */
+function inlineText(text) {
+  if (!text) return null;
+  const regex = /(\*\*[^*]+\*\*|`[^`]+`)/g;
+  const parts = [];
+  let lastIdx = 0;
+  let k = 0;
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIdx) parts.push(text.slice(lastIdx, match.index));
+    const tok = match[0];
+    if (tok.startsWith("**"))
+      parts.push(<strong key={k++}>{tok.slice(2, -2)}</strong>);
+    else
+      parts.push(<code key={k++} className="inline-code">{tok.slice(1, -1)}</code>);
+    lastIdx = match.index + tok.length;
+  }
+  if (lastIdx < text.length) parts.push(text.slice(lastIdx));
+  if (parts.length === 0) return null;
+  if (parts.length === 1 && typeof parts[0] === "string") return parts[0];
+  return parts;
+}
+
+/** Parse a markdown table block into a styled <table>. */
+function renderMdTable(tableLines, tableKey) {
+  const parseRow = (line) =>
+    line.split("|").slice(1, -1).map((c) => c.trim());
+  const isSep = (row) => row.every((c) => /^[-: ]+$/.test(c));
+  const rows = tableLines.map(parseRow);
+  if (!rows.length) return null;
+  const header = rows[0];
+  const body = rows.slice(1).filter((r) => !isSep(r));
+
+  // Assign a tone class based on cell text content
+  const cellTone = (text) => {
+    const t = text.toLowerCase();
+    if (/✅|posted|complete|yes|executed|enabled/.test(t)) return "md-cell-ok";
+    if (/⚠️|missing|skip|warning|not posted/.test(t)) return "md-cell-warn";
+    if (/❌|error|fail|🔴/.test(t)) return "md-cell-err";
+    if (/^—$|^-$|^n\/a$/i.test(t.trim())) return "md-cell-muted";
+    return "";
+  };
+
+  return (
+    <div key={tableKey} className="md-table-wrap">
+      <table className="md-table">
+        <thead>
+          <tr>{header.map((h, i) => <th key={i}>{inlineText(h)}</th>)}</tr>
+        </thead>
+        <tbody>
+          {body.map((row, ri) => (
+            <tr key={ri}>
+              {row.map((cell, ci) => (
+                <td key={ci} className={cellTone(cell)}>{inlineText(cell)}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** Full markdown-to-JSX renderer for bot chat bubbles. */
+function MarkdownBubble({ text }) {
+  const lines = (text || "").split("\n");
+  const elements = [];
+  let i = 0;
+  let bk = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    if (line.startsWith("### ")) {
+      elements.push(<h3 key={bk++} className="md-h3">{inlineText(line.slice(4))}</h3>);
+      i++; continue;
+    }
+    if (line.startsWith("#### ")) {
+      elements.push(<h4 key={bk++} className="md-h4">{inlineText(line.slice(5))}</h4>);
+      i++; continue;
+    }
+    if (line.startsWith("## ")) {
+      elements.push(<h3 key={bk++} className="md-h3">{inlineText(line.slice(3))}</h3>);
+      i++; continue;
+    }
+    if (line.startsWith("> ")) {
+      elements.push(
+        <blockquote key={bk++} className="md-blockquote">
+          {inlineText(line.slice(2))}
+        </blockquote>
+      );
+      i++; continue;
+    }
+    if (line.startsWith("|")) {
+      const tableLines = [];
+      while (i < lines.length && lines[i].startsWith("|")) { tableLines.push(lines[i]); i++; }
+      elements.push(renderMdTable(tableLines, `tbl-${bk++}`));
+      continue;
+    }
+    if (line.startsWith("- ") || line.startsWith("* ")) {
+      const items = [];
+      while (i < lines.length && (lines[i].startsWith("- ") || lines[i].startsWith("* "))) {
+        items.push(<li key={i}>{inlineText(lines[i].slice(2))}</li>);
+        i++;
+      }
+      elements.push(<ul key={bk++} className="md-ul">{items}</ul>);
+      continue;
+    }
+    if (line.trim() === "") { i++; continue; }
+    elements.push(<p key={bk++} className="md-p">{inlineText(line)}</p>);
+    i++;
+  }
+  return <div className="md-render">{elements}</div>;
+}
+
+/** Returns true if this bot reply contains markdown that should be rendered. */
+function hasMarkdown(text) {
+  return /(?:^|\n)[|#>]/.test(text || "");
 }
 
 // ── Ticket key link helper ────────────────────────────────────
