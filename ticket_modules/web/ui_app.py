@@ -1708,7 +1708,8 @@ def jira_analyze_support_ticket():
     body = request.json or {}
     issue_key = str(body.get("issueKey") or "").strip()
     since_hours = SINGLE_ANALYZE_SINCE_HOURS
-    execute_api = bool(body.get("executeApi", False))
+    # MCP tools policy: always execute API for analyzer runs from UI.
+    execute_api = True
     enable_jira_comment = bool(body.get("enableJiraComment", False))
     if not issue_key:
         return jsonify({"error": "issueKey is required"}), 400
@@ -1733,7 +1734,8 @@ def jira_analyze_bulk_dry_run():
     since_hours = BULK_DRY_RUN_SINCE_HOURS
     sample_size = BULK_DRY_RUN_SAMPLE_SIZE
     extra_keywords_raw = body.get("extraKeywords") or []
-    execute_api = bool(body.get("executeApi", False))
+    # MCP tools policy: always execute API for bulk analyzer runs from UI.
+    execute_api = True
     enable_jira_comment = bool(body.get("enableJiraComment", False))
 
     # Safety guard: testing-only scope as requested.

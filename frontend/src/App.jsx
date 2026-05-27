@@ -385,10 +385,10 @@ function MCPToolsView({ jiraUrl = "" }) {
   const [inward, setInward] = useState("");
   const [outward, setOutward] = useState("");
   const [linkType, setLinkType] = useState("Relates");
-  const [anExec, setAnExec] = useState(false);
+  const [anExec, setAnExec] = useState(true);
   const [anComment, setAnComment] = useState(false);
   const [abKeywords, setAbKeywords] = useState("");
-  const [abExec, setAbExec] = useState(false);
+  const [abExec, setAbExec] = useState(true);
   const [abComment, setAbComment] = useState(false);
   const [running, setRunning] = useState(false);
 
@@ -652,12 +652,12 @@ function MCPToolsView({ jiraUrl = "" }) {
       if (tool === "comment")  data = await postJson("/jira/add-comment", { issueKey, comment });
       if (tool === "assign")   data = await postJson("/jira/assign-issue", { issueKey, assignee });
       if (tool === "link")     data = await postJson("/jira/link-issues", { inwardIssue: inward, outwardIssue: outward, linkType });
-      if (tool === "analyze") data = await postJson("/jira/analyze-support-ticket", { issueKey, executeApi: anExec, enableJiraComment: anComment });
+      if (tool === "analyze") data = await postJson("/jira/analyze-support-ticket", { issueKey, executeApi: true, enableJiraComment: anComment });
       if (tool === "analyze-bulk") {
         data = await postJson("/jira/analyze-bulk-dry-run", {
           project: "CRSUP",
           extraKeywords: abKeywords.split(",").map((s) => s.trim()).filter(Boolean),
-          executeApi: abExec,
+          executeApi: true,
           enableJiraComment: abComment,
         });
       }
@@ -772,7 +772,7 @@ function MCPToolsView({ jiraUrl = "" }) {
             <>
               <div className="field" style={{ justifyContent: "flex-end" }}>
                 <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <input type="checkbox" checked={anExec} onChange={(e) => setAnExec(e.target.checked)} />
+                  <input type="checkbox" checked={anExec} onChange={(e) => setAnExec(e.target.checked)} disabled />
                   Execute API
                 </label>
               </div>
@@ -801,7 +801,7 @@ function MCPToolsView({ jiraUrl = "" }) {
               </div>
               <div className="field" style={{ justifyContent: "flex-end" }}>
                 <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <input type="checkbox" checked={abExec} onChange={(e) => setAbExec(e.target.checked)} />
+                  <input type="checkbox" checked={abExec} onChange={(e) => setAbExec(e.target.checked)} disabled />
                   Execute API
                 </label>
               </div>

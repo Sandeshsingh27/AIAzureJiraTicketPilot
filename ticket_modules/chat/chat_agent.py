@@ -205,7 +205,10 @@ SYSTEM_PROMPT = (
     "use the `analyze_support_ticket` tool. "
     "If the user asks for bulk operations over previously listed tickets (e.g. 'for these tickets hit API', "
     "'run for all above tickets', 'do not comment on Jira'), use `analyze_bulk_dry_run` and keep comment posting aligned with user intent. "
-    "In particular: 'do not comment' means enableJiraComment=false. "
+    "In particular: 'do not comment' / 'no comment' / 'without comment' means enableJiraComment=false. "
+    "Conversely: 'comment on the ticket' / 'comment on jira' / 'add a comment' / 'post a comment' / "
+    "'comment on the jira ticket' means enableJiraComment=true. "
+    "Always honour the user's explicit comment intent — if they asked to comment, set enableJiraComment=true. "
     "IMPORTANT: If user asks to post Jira comments containing request/response payloads or API output, "
     "DO NOT draft free-form comment text and DO NOT use placeholders like '{...}'. "
     "Always call `analyze_support_ticket` with enableJiraComment=true (or `post_analysis_comment`) so backend posts the standard structured comment format used by MCP single/bulk analysis. "
@@ -502,14 +505,16 @@ def tool_analyze_support_ticket(issueKey: str, executeApi: bool = False, enableJ
     if not _key_is_allowed(issueKey):
         return {"error": f"Refused: {issueKey} is outside allowed projects {ALLOWED_PROJECTS}."}
     try:
+        # Chat policy: always execute API for analysis; analyzer itself skips only when required fields are missing.
         result = run_support_ticket_analysis(
             issue_key=issueKey,
             since_hours=SINGLE_ANALYZE_SINCE_HOURS,
-            execute_api=bool(executeApi),
+            execute_api=True,
             output_path=None,
             comment_jira=bool(enableJiraComment),
             preview_jira_comment=True,
         )
+        result["executeApiForcedByChatPolicy"] = True
         return result
     except Exception as e:
         return {"error": str(e)}
@@ -534,9 +539,12 @@ def tool_analyze_bulk_dry_run(extraKeywords: list | None = None, executeApi: boo
     size = BULK_DRY_RUN_SAMPLE_SIZE
     since_hours = BULK_DRY_RUN_SINCE_HOURS
     phrase_clause = " OR ".join([f'text ~ "\\"{kw}\\""' for kw in combined])
+    # Note: do NOT include _SCOPE_CLAUSE here — tool_search_issues calls
+    # _enforce_jql_scope() which appends it automatically, so including it
+    # explicitly would produce a duplicate project/status filter in the JQL.
     jql = (
-        f'(project = "CRSUP" AND statusCategory != Done AND ({phrase_clause})) '
-        f"AND {_SCOPE_CLAUSE} ORDER BY updated DESC"
+        f'project = "CRSUP" AND statusCategory != Done AND ({phrase_clause}) '
+        "ORDER BY updated DESC"
     )
 
     search = tool_search_issues(jql=jql, maxResults=size)
@@ -558,17 +566,19 @@ def tool_analyze_bulk_dry_run(extraKeywords: list | None = None, executeApi: boo
             analysis = run_support_ticket_analysis(
                 issue_key=key,
                 since_hours=since_hours,
-                execute_api=bool(executeApi),
+                # Chat policy: always execute API for analysis; analyzer skips only when required fields are missing.
+                execute_api=True,
                 output_path=None,
                 comment_jira=bool(enableJiraComment),
                 preview_jira_comment=True,
             )
+            nr_summary = ((analysis.get("newRelic") or {}).get("summary") or {})
             results.append({
                 "issueKey": key,
                 "summary": issue.get("summary"),
                 "analyzed": True,
                 "dryRun": True,
-                "executeApi": bool(executeApi),
+                "executeApi": True,
                 "jiraCommentPostingEnabled": bool(enableJiraComment),
                 "jiraComment": analysis.get("jiraComment"),
                 "wouldCommentPreview": (
@@ -578,6 +588,8 @@ def tool_analyze_bulk_dry_run(extraKeywords: list | None = None, executeApi: boo
                 "singleAvailExecution": analysis.get("singleAvailExecution"),
                 "singleAvailResponseStatus": (analysis.get("singleAvailResponse") or {}).get("statusCode"),
                 "newRelicSampleCount": (analysis.get("newRelic") or {}).get("sampleCount"),
+                "newRelicSkipReason": nr_summary.get("skipReason"),
+                "missingCoreFilterFields": nr_summary.get("missingCoreFilterFields") or [],
             })
         except Exception as exc:
             results.append({
@@ -598,15 +610,45 @@ def tool_analyze_bulk_dry_run(extraKeywords: list | None = None, executeApi: boo
         "keywordsFromConfig": keywords,
         "keywordsFromInput": extras,
         "keywordsUsed": combined,
-        "executeApi": bool(executeApi),
+        "executeApi": True,
+        "executeApiForcedByChatPolicy": True,
         "jiraCommentPreviewEnabled": True,
         "jiraCommentPostingEnabled": bool(enableJiraComment),
         "effective_jql": search.get("effective_jql") or jql,
         "ticketsMatched": len(issues),
         "pickedTickets": picked_tickets,
         "results": results,
-        "note": "Dry-run utility for CRSUP. Keep enableJiraComment=false for safe testing.",
+        "note": "Dry-run utility for CRSUP. API execution is always enabled in AI chat mode; analyzer skips only when required fields are missing.",
     }
+
+
+def _bulk_action_label(item: dict) -> str:
+    """Derive a concise action string for a single bulk result item."""
+    analyzed = bool(item.get("analyzed"))
+    exec_info = item.get("singleAvailExecution") or {}
+    api_status = item.get("singleAvailResponseStatus")
+    missing = item.get("missingCoreFilterFields") or []
+    skip_reason = item.get("newRelicSkipReason") or exec_info.get("reason") or "-"
+
+    if not analyzed:
+        return f"❌ Analyzer error — {item.get('error') or '-'}"
+    if missing:
+        return f"⚠️ Missing fields: {', '.join(missing)}"
+    if exec_info.get("requested") and not exec_info.get("performed"):
+        return f"⚠️ API skipped — {exec_info.get('reason') or skip_reason}"
+    if exec_info.get("performed") and api_status is not None and int(api_status) >= 200 and int(api_status) < 300:
+        jira_comment_info = item.get("jiraComment") or {}
+        comment_posted = bool(jira_comment_info.get("posted"))
+        comment_enabled = bool(item.get("jiraCommentPostingEnabled"))
+        if comment_posted:
+            return "✅ Complete — Jira comment posted"
+        elif comment_enabled:
+            return f"✅ Complete — comment not posted ({jira_comment_info.get('reason') or 'unknown reason'})"
+        else:
+            return "✅ Complete — Jira comment not requested"
+    if exec_info.get("performed"):
+        return f"🔴 API error (HTTP {api_status}) — check inputs and retry"
+    return "✅ Complete — enable API for runtime validation"
 
 
 def _build_bulk_dry_run_reply(result: dict, args: dict) -> str:
@@ -614,37 +656,118 @@ def _build_bulk_dry_run_reply(result: dict, args: dict) -> str:
         return f"Bulk dry-run failed: {result.get('error')}"
 
     picked = result.get("pickedTickets") or []
+    rows = result.get("results") or []
+    api_success = 0
+    api_skipped = 0
+    needs_fields = 0
+    comment_posted_count = 0
+    for item in rows:
+        exec_info = item.get("singleAvailExecution") or {}
+        if exec_info.get("requested") and exec_info.get("performed"):
+            api_success += 1
+        elif exec_info.get("requested") and not exec_info.get("performed"):
+            api_skipped += 1
+        if item.get("missingCoreFilterFields"):
+            needs_fields += 1
+        if bool((item.get("jiraComment") or {}).get("posted")):
+            comment_posted_count += 1
+
+    jira_comment_enabled = bool(args.get("enableJiraComment"))
+
+    # Split into completed-vs-remaining buckets for clearer reporting.
+    completed_with_comment: list[dict] = []
+    remaining_rows: list[dict] = []
+    field_issues: list[dict] = []
+    for item in rows:
+        exec_info = item.get("singleAvailExecution") or {}
+        api_status = item.get("singleAvailResponseStatus")
+        comment_posted = bool((item.get("jiraComment") or {}).get("posted"))
+        is_success_http = api_status is not None and int(api_status) >= 200 and int(api_status) < 300
+        is_completed = bool(item.get("analyzed")) and exec_info.get("performed") and is_success_http and comment_posted
+        if item.get("missingCoreFilterFields"):
+            field_issues.append(item)
+        elif is_completed:
+            completed_with_comment.append(item)
+        else:
+            remaining_rows.append(item)
+
+    # ── Header ────────────────────────────────────────────────────────────────
     lines: list[str] = [
-        "Ran CRSUP bulk dry-run directly (bypassing LLM parsing to avoid content-filter false positives).",
-        f"Matched {result.get('ticketsMatched', 0)} ticket(s).",
-        f"Picked (sample): {', '.join([p.get('issueKey', '?') for p in picked]) if picked else 'none'}",
-        f"Using backend defaults: sinceHours={result.get('sinceHoursConfigured')}, sampleSize={result.get('sampleSizeConfigured')}",
-        f"executeApi={bool(args.get('executeApi'))}, enableJiraComment={bool(args.get('enableJiraComment'))}",
+        "### 🔍 CRSUP Bulk Analysis — Results",
         "",
-        "Dry-run log:",
+        "| Parameter | Value |",
+        "|-----------|-------|",
+        f"| Tickets matched | {result.get('ticketsMatched', 0)} |",
+        f"| Sample picked | {len(rows)} |",
+        f"| Since hours | {result.get('sinceHoursConfigured')} |",
+        f"| Sample size configured | {result.get('sampleSizeConfigured')} |",
+        f"| Execute API | {'✅ Yes' if result.get('executeApi') else '❌ No'} |",
+        f"| Jira comment posting | {'✅ Enabled' if jira_comment_enabled else '⬜ Disabled'} |",
+        "",
+        "#### 📊 Outcome Summary",
+        "",
+        "| Metric | Count |",
+        "|--------|-------|",
+        f"| ✅ API executed successfully | {api_success} |",
+        f"| ⚠️ API skipped (missing fields) | {api_skipped} |",
+        f"| 💬 Jira comments posted | {comment_posted_count} |",
+        f"| 📝 Tickets needing field updates | {needs_fields} |",
+        "",
     ]
 
-    for item in result.get("results") or []:
-        key = item.get("issueKey") or "?"
-        status = "ok" if item.get("analyzed") else "error"
-        nr_count = item.get("newRelicSampleCount")
-        api_status = item.get("singleAvailResponseStatus")
-        lines.append(
-            f"- {key}: analyzed={status}, newRelicSampleCount={nr_count}, singleAvailResponseStatus={api_status}"
-        )
-        preview = item.get("wouldCommentPreview")
-        if preview:
-            preview_text = str(preview).strip()
-            if BULK_REPLY_COMMENT_PREVIEW_MAX_CHARS > 0 and len(preview_text) > BULK_REPLY_COMMENT_PREVIEW_MAX_CHARS:
-                preview_text = preview_text[:BULK_REPLY_COMMENT_PREVIEW_MAX_CHARS] + "\n...[truncated]"
-            lines.append("  would-be Jira comment:")
-            lines.append(preview_text)
+    def _append_ticket_table(title: str, table_rows: list[dict]) -> None:
+        if not table_rows:
+            return
+        lines.extend([
+            "",
+            title,
+            "",
+            "| Ticket | Summary | Analyzed | NR Logs | API | HTTP | Jira Comment | Action |",
+            "|--------|---------|----------|---------|-----|------|--------------|--------|",
+        ])
+        for item in table_rows:
+            key = item.get("issueKey") or "?"
+            summary = (item.get("summary") or "-")
+            # Truncate long summaries for table readability
+            if len(summary) > 45:
+                summary = summary[:42] + "…"
+            analyzed = "✅" if item.get("analyzed") else "❌"
+            nr_count = item.get("newRelicSampleCount")
+            nr_cell = f"{nr_count}" if nr_count is not None else "-"
+            exec_info = item.get("singleAvailExecution") or {}
+            api_cell = "✅" if exec_info.get("performed") else ("⚠️ Skip" if exec_info.get("requested") else "—")
+            api_status = item.get("singleAvailResponseStatus")
+            http_cell = str(api_status) if api_status is not None else "—"
+            jira_comment_info = item.get("jiraComment") or {}
+            comment_posted = bool(jira_comment_info.get("posted"))
+            comment_cell = "Posted" if comment_posted else ("Not posted" if jira_comment_enabled else "-")
+            action = _bulk_action_label(item)
+            lines.append(f"| **{key}** | {summary} | {analyzed} | {nr_cell} | {api_cell} | {http_cell} | {comment_cell} | {action} |")
+
+    _append_ticket_table("#### ✅ Tickets Completed (Jira Comment Posted)", completed_with_comment)
+    _append_ticket_table("#### 🎫 Remaining Tickets", remaining_rows)
+
+    # ── Detail rows for tickets needing field updates ─────────────────────────
+    if field_issues:
+        lines.extend([
+            "",
+            "#### ⚠️ Tickets Requiring Field Updates",
+            "",
+            "| Ticket | Missing Fields | Skip Reason |",
+            "|--------|---------------|-------------|",
+        ])
+        for item in field_issues:
+            key = item.get("issueKey") or "?"
+            missing = ", ".join(item.get("missingCoreFilterFields") or [])
+            exec_info = item.get("singleAvailExecution") or {}
+            reason = item.get("newRelicSkipReason") or exec_info.get("reason") or "-"
+            lines.append(f"| **{key}** | {missing} | {reason} |")
 
     return "\n".join(lines)
 
 
 def _build_support_ticket_reply(result: dict, args: dict) -> str:
-    """Generate a factual response for analyze_support_ticket from tool output only."""
+    """Generate a factual, table-formatted response for analyze_support_ticket."""
     if not isinstance(result, dict):
         return "Support ticket analysis finished, but returned an unexpected payload shape."
     if result.get("error"):
@@ -659,43 +782,241 @@ def _build_support_ticket_reply(result: dict, args: dict) -> str:
     jira_comment = result.get("jiraComment") or {}
     api = result.get("singleAvailResponse") or {}
     indicators = result.get("indicators") or {}
+    comment_enabled = bool(args.get("enableJiraComment"))
+    comment_posted = bool(jira_comment.get("posted"))
 
-    lines = [
-        f"Analysis completed for {key}.",
-        f"Summary: {summary}",
+    # ── Header card ───────────────────────────────────────────────────────────
+    lines: list[str] = [
+        f"### 🎫 Single Ticket Analysis — {key}",
+        f"> **{summary}**",
         "",
-        "New Relic:",
-        f"- Matched: {nr.get('matched')}",
-        f"- Successful: {nr.get('successful')}",
-        f"- Sample count: {nr_sample_count}",
+        "#### 📋 Analysis Overview",
+        "",
+        "| Field | Value |",
+        "|-------|-------|",
+        f"| Ticket | **{key}** |",
+        f"| Analyzed | ✅ Yes |",
+        "",
+        "#### 🔭 New Relic Logs",
+        "",
+        "| Metric | Value |",
+        "|--------|-------|",
+        f"| Log samples matched | {nr.get('matched') if nr.get('matched') is not None else '—'} |",
+        f"| Successful events | {nr.get('successful') if nr.get('successful') is not None else '—'} |",
+        f"| Sample count | {nr_sample_count if nr_sample_count is not None else '—'} |",
     ]
     if nr.get("skipReason"):
-        lines.append(f"- Skip reason: {nr.get('skipReason')}")
+        lines.append(f"| Skip reason | ⚠️ {nr.get('skipReason')} |")
+    if nr.get("missingCoreFilterFields"):
+        lines.append(f"| Missing fields | `{'`, `'.join(nr.get('missingCoreFilterFields'))}` |")
+
+    # ── SingleAvail execution ─────────────────────────────────────────────────
+    api_status = api.get("statusCode") if api else None
+    api_icon = "✅" if api_status and int(api_status) >= 200 and int(api_status) < 300 else ("🔴" if api_status else "—")
+    lines.extend([
+        "",
+        "#### ⚙️ SingleAvail API Execution",
+        "",
+        "| Field | Value |",
+        "|-------|-------|",
+        f"| Requested | {'✅ Yes' if execution.get('requested') else '❌ No'} |",
+        f"| Performed | {'✅ Yes' if execution.get('performed') else '⚠️ No'} |",
+        f"| Reason | {execution.get('reason') or 'n/a'} |",
+    ])
+    if api_status is not None:
+        lines.append(f"| HTTP Response | {api_icon} {api_status} |")
+
+    # ── Jira comment ──────────────────────────────────────────────────────────
+    if comment_posted:
+        comment_status = "✅ Posted successfully"
+    elif comment_enabled:
+        comment_status = f"⚠️ Not posted — {jira_comment.get('reason') or 'unknown reason'}"
+    else:
+        comment_status = "⬜ Disabled for this run"
 
     lines.extend([
         "",
-        "SingleAvail execution:",
-        f"- Requested: {execution.get('requested')}",
-        f"- Performed: {execution.get('performed')}",
-        f"- Reason: {execution.get('reason') or 'n/a'}",
+        "#### 💬 Jira Comment",
+        "",
+        "| Field | Value |",
+        "|-------|-------|",
+        f"| Posting enabled | {'✅ Yes' if comment_enabled else '⬜ No'} |",
+        f"| Status | {comment_status} |",
     ])
-    if api:
-        lines.append(f"- Response status: {api.get('statusCode')}")
+    if jira_comment.get("reason") and not comment_posted:
+        lines.append(f"| Detail | {jira_comment.get('reason')} |")
 
+    # ── Extracted indicators ─────────────��────────────────────────────────────
+    has_any = any(indicators.get(f) for f in ("hrCode", "hKey", "chainId", "customerKey", "companyKey"))
     lines.extend([
         "",
-        "Jira comment:",
-        f"- Posting enabled: {bool(args.get('enableJiraComment'))}",
-        f"- Posted: {jira_comment.get('posted')}",
-        f"- Reason: {jira_comment.get('reason') or 'n/a'}",
+        "#### 🔑 Extracted Core Fields",
         "",
-        "Extracted core fields:",
-        f"- hrCode: {indicators.get('hrCode')}",
-        f"- hKey: {indicators.get('hKey')}",
-        f"- chainId: {indicators.get('chainId')}",
-        f"- customerKey: {indicators.get('customerKey')}",
-        f"- companyKey: {indicators.get('companyKey')}",
+        "| Field | Value |",
+        "|-------|-------|",
+        f"| hrCode | `{indicators.get('hrCode') or '—'}` |",
+        f"| hKey | `{indicators.get('hKey') or '—'}` |",
+        f"| chainId | `{indicators.get('chainId') or '—'}` |",
+        f"| customerKey | `{indicators.get('customerKey') or '—'}` |",
+        f"| companyKey | `{indicators.get('companyKey') or '—'}` |",
     ])
+    if not has_any:
+        lines.append("")
+        lines.append("> ⚠️ No core filter fields were found in this ticket. Update the ticket with the required identifiers for full analysis.")
+
+    return "\n".join(lines)
+
+
+def _md_cell(value, *, limit: int = 140) -> str:
+    text = "—" if value is None else str(value)
+    text = re.sub(r"\s+", " ", text).strip() or "—"
+    if len(text) > limit:
+        text = text[: limit - 1] + "…"
+    return text.replace("|", "\\|")
+
+
+def _build_post_analysis_comment_reply(result: dict, args: dict) -> str:
+    issue_key = result.get("issueKey") or args.get("issueKey") or "(unknown)"
+    if result.get("error"):
+        return (
+            "### 💬 Post Analysis Comment\n\n"
+            "| Field | Value |\n"
+            "|-------|-------|\n"
+            f"| Ticket | {issue_key} |\n"
+            f"| Status | ❌ Failed |\n"
+            f"| Error | {_md_cell(result.get('error'))} |"
+        )
+
+    comment = result.get("jiraComment") or {}
+    posted = bool(comment.get("posted"))
+    reason = comment.get("reason") or "n/a"
+    api_status = (result.get("singleAvailResponse") or {}).get("statusCode")
+    return (
+        "### 💬 Post Analysis Comment\n\n"
+        "| Field | Value |\n"
+        "|-------|-------|\n"
+        f"| Ticket | {issue_key} |\n"
+        f"| Execute API | {'✅ Yes' if bool(result.get('executeApi')) else '❌ No'} |\n"
+        f"| API Status | {_md_cell(api_status)} |\n"
+        f"| Jira Comment | {'✅ Posted' if posted else '⚠️ Not posted'} |\n"
+        f"| Reason | {_md_cell(reason)} |"
+    )
+
+
+def _build_generic_tool_trace_reply(tool_trace: list[dict]) -> str | None:
+    if not tool_trace:
+        return None
+
+    lines: list[str] = [
+        "### 📋 Query Result",
+        "",
+        "| Metric | Value |",
+        "|--------|-------|",
+        f"| Tools executed | {len(tool_trace)} |",
+        f"| Failed tools | {sum(1 for t in tool_trace if (t.get('result') or {}).get('error'))} |",
+        "",
+    ]
+
+    for entry in tool_trace:
+        name = entry.get("tool") or "unknown"
+        args = entry.get("args") or {}
+        result = entry.get("result") or {}
+        lines.extend(["", f"#### 🛠️ `{name}`", ""])
+
+        if result.get("error"):
+            lines.extend([
+                "| Field | Value |",
+                "|-------|-------|",
+                f"| Status | ❌ Failed |",
+                f"| Error | {_md_cell(result.get('error'))} |",
+            ])
+            continue
+
+        if name in {"search_issues", "search_concept"}:
+            issues = result.get("issues") or []
+            lines.extend([
+                "| Field | Value |",
+                "|-------|-------|",
+                f"| Matches | {len(issues)} |",
+                f"| Max Results | {_md_cell(args.get('maxResults'))} |",
+                f"| Effective JQL | `{_md_cell(result.get('effective_jql'), limit=260)}` |",
+                "",
+                "| Ticket | Summary | Status | Priority | Assignee |",
+                "|--------|---------|--------|----------|----------|",
+            ])
+            if issues:
+                for issue in issues:
+                    lines.append(
+                        f"| **{_md_cell(issue.get('key'))}** | {_md_cell(issue.get('summary'))} | "
+                        f"{_md_cell(issue.get('status'))} | {_md_cell(issue.get('priority'))} | {_md_cell(issue.get('assignee'))} |"
+                    )
+            else:
+                lines.append("| — | No records | — | — | — |")
+            continue
+
+        if name == "get_issue":
+            lines.extend([
+                "| Field | Value |",
+                "|-------|-------|",
+                f"| Ticket | {_md_cell(result.get('key'))} |",
+                f"| Summary | {_md_cell(result.get('summary'))} |",
+                f"| Status | {_md_cell(result.get('status'))} |",
+                f"| Priority | {_md_cell(result.get('priority'))} |",
+                f"| Assignee | {_md_cell(result.get('assignee'))} |",
+                f"| Reporter | {_md_cell(result.get('reporter'))} |",
+            ])
+            continue
+
+        if name == "create_issue":
+            lines.extend([
+                "| Field | Value |",
+                "|-------|-------|",
+                f"| Status | {'✅ Created' if result.get('created') else '⚠️ Not created'} |",
+                f"| Ticket | {_md_cell(result.get('created'))} |",
+                f"| URL | {_md_cell(result.get('url'))} |",
+                f"| Assignee | {_md_cell(result.get('assignee'))} |",
+            ])
+            continue
+
+        if name == "assign_issue":
+            lines.extend([
+                "| Field | Value |",
+                "|-------|-------|",
+                f"| Ticket | {_md_cell(result.get('issueKey'))} |",
+                f"| Assignee | {_md_cell(result.get('assignee'))} |",
+                f"| Status | {'✅ Assigned' if result.get('status') == 'assigned' else _md_cell(result.get('status'))} |",
+            ])
+            continue
+
+        if name == "add_comment":
+            lines.extend([
+                "| Field | Value |",
+                "|-------|-------|",
+                f"| Ticket | {_md_cell(result.get('issueKey'))} |",
+                f"| Comment ID | {_md_cell(result.get('id'))} |",
+                f"| Status | {'✅ Added' if result.get('status') == 'added' else _md_cell(result.get('status'))} |",
+            ])
+            continue
+
+        if name == "link_issues":
+            lines.extend([
+                "| Field | Value |",
+                "|-------|-------|",
+                f"| From | {_md_cell(result.get('from'))} |",
+                f"| To | {_md_cell(result.get('to'))} |",
+                f"| Link Type | {_md_cell(result.get('type'))} |",
+                f"| Linked | {'✅ Yes' if result.get('linked') else '❌ No'} |",
+            ])
+            continue
+
+        # Safe fallback for other tool payloads
+        lines.extend([
+            "| Field | Value |",
+            "|-------|-------|",
+            "| Status | ✅ Success |",
+            f"| Data | `{_md_cell(json.dumps(result, ensure_ascii=True), limit=280)}` |",
+        ])
+
     return "\n".join(lines)
 
 
@@ -733,7 +1054,7 @@ def _extract_bulk_dry_run_args(user_message: str) -> dict | None:
 
     args = {
         "extraKeywords": [],
-        "executeApi": False,
+        "executeApi": True,
         "enableJiraComment": False,
     }
 
@@ -752,6 +1073,16 @@ def _extract_bulk_dry_run_args(user_message: str) -> dict | None:
     m = re.search(r"enablejiracomment\s*(true|false|yes|no|on|off|1|0)", lower)
     if m:
         args["enableJiraComment"] = _parse_bool_token(m.group(1), args["enableJiraComment"])
+
+    # Detect natural-language comment intent ("comment on the jira ticket", etc.)
+    _no_comment_phrases = ["do not comment", "don't comment", "no comment", "without comment",
+                           "disable comment", "comment off"]
+    _yes_comment_phrases = ["comment on jira", "comment on the jira", "comment on the ticket",
+                            "comment on ticket", "add comment", "post comment", "enable comment",
+                            "comment on it", "leave a comment", "write comment"]
+    if not args["enableJiraComment"]:
+        if any(p in lower for p in _yes_comment_phrases) and not any(p in lower for p in _no_comment_phrases):
+            args["enableJiraComment"] = True
 
     # Parse "extra keywords: ..." list.
     extra_match = re.search(r"extra\s*keywords\s*:\s*(.+)$", text, flags=re.IGNORECASE)
@@ -839,15 +1170,22 @@ def _extract_bulk_followup_args(user_message: str, history: list | None) -> dict
         token in lower
         for token in (
             "comment on jira",
+            "comment on the jira",
+            "comment on the ticket",
+            "comment on ticket",
+            "comment on it",
             "add comment",
             "post comment",
             "enable comment",
+            "comment the ticket",
+            "write comment",
+            "leave a comment",
         )
     ) and not no_comment
 
     return {
         "extraKeywords": [],
-        "executeApi": bool(execute_api),
+        "executeApi": True,
         "enableJiraComment": bool(yes_comment),
     }
 
@@ -1133,8 +1471,9 @@ def run_chat(history: list, user_message: str, max_steps: int = 8):
 
         if not msg.tool_calls:
             # final assistant reply
+            tabular_reply = _build_generic_tool_trace_reply(tool_trace)
             return {
-                "reply":      msg.content or "(no response)",
+                "reply":      tabular_reply or msg.content or "(no response)",
                 "history":    _history_for_client(messages),
                 "tool_trace": tool_trace,
             }
@@ -1197,18 +1536,7 @@ def run_chat(history: list, user_message: str, max_steps: int = 8):
         elif analyzed_result is not None:
             direct_reply = _build_support_ticket_reply(analyzed_result, analyzed_args or {})
         elif comment_post_result is not None:
-            if comment_post_result.get("error"):
-                direct_reply = (
-                    f"Posting analysis comment failed for {(comment_post_args or {}).get('issueKey')}: "
-                    f"{comment_post_result.get('error')}"
-                )
-            else:
-                jc = comment_post_result.get("jiraComment") or {}
-                direct_reply = (
-                    f"Posted analyzer-formatted Jira comment for "
-                    f"{comment_post_result.get('issueKey') or (comment_post_args or {}).get('issueKey')}. "
-                    f"posted={jc.get('posted')}, reason={jc.get('reason') or 'n/a'}"
-                )
+            direct_reply = _build_post_analysis_comment_reply(comment_post_result, comment_post_args or {})
 
         if direct_reply:
             messages.append({"role": "assistant", "content": direct_reply})
