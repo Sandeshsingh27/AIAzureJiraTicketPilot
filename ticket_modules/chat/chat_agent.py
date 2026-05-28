@@ -1101,6 +1101,11 @@ def _extract_bulk_followup_args(user_message: str, history: list | None) -> dict
     if not lower:
         return None
 
+    # Do not hijack concept-search requests (e.g. "room category issue")
+    # into availability bulk dry-run.
+    if "room category" in lower:
+        return None
+
     refers_previous_batch = any(
         token in lower
         for token in (
