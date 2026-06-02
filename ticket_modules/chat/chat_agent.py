@@ -1098,19 +1098,47 @@ def _extract_bulk_followup_args(user_message: str, history: list | None) -> dict
     """Detect follow-up commands that should continue prior bulk-ticket workflow."""
     text = (user_message or "").strip()
     lower = text.lower()
+    lower_norm = re.sub(r"[-_]+", " ", lower)
     if not lower:
         return None
 
     # Do not hijack concept-search requests (e.g. "room category issue")
     # into availability bulk dry-run.
-    if "room category" in lower:
+    if re.search(r"\broom\s+category\b", lower_norm):
+        return None
+
+    # If user is asking to list/search tickets (without analysis intent),
+    # route to search tools instead of bulk analyzer follow-up.
+    search_intent = any(
+        token in lower_norm
+        for token in ("list", "list down", "show", "search", "find", "fetch", "get")
+    ) and "ticket" in lower_norm
+    analysis_intent = any(
+        token in lower_norm
+        for token in (
+            "analy",
+            "dry run",
+            "dry-run",
+            "bulk dry",
+            "execute api",
+            "hit the api",
+            "run api",
+            "call the api",
+            "perform api",
+            "post comment",
+            "comment on jira",
+        )
+    )
+    if search_intent and not analysis_intent:
         return None
 
     refers_previous_batch = any(
-        token in lower
+        token in lower_norm
         for token in (
             "for these tickets",
             "for above tickets",
+            "for all above tickets",
+            "above tickets",
             "for all these tickets",
             "for the tickets",
             "those tickets",
@@ -1118,7 +1146,7 @@ def _extract_bulk_followup_args(user_message: str, history: list | None) -> dict
         )
     )
     asks_bulk_run = any(
-        token in lower
+        token in lower_norm
         for token in (
             "bulk",
             "all tickets",
