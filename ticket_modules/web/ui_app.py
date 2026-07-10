@@ -14,6 +14,9 @@ import threading
 import queue
 import json
 import re
+from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import quote
 import requests
 from pathlib import Path
 from flask import Flask, render_template_string, request, jsonify, Response, stream_with_context
@@ -1446,22 +1449,24 @@ def run_orchestrator():
     data     = request.json or {}
     dry_run  = data.get("dry_run", "true")
     test_key = data.get("test_key", "").strip()
+    dry_run_bool = str(dry_run).strip().lower() in ("1", "true", "yes", "y", "on")
 
     env = os.environ.copy()
-    env["DRY_RUN"] = dry_run
+    env["DRY_RUN"] = "true" if dry_run_bool else "false"
     if test_key:
         env["TEST_ISSUE_KEY"] = test_key
     else:
         env.pop("TEST_ISSUE_KEY", None)
 
     script = _resolve_orchestrator_script()
+    cmd = [sys.executable, "-u", script, "--dry-run" if dry_run_bool else "--live"]
 
     def sse(event, payload):
         return f"event: {event}\ndata: {json.dumps(payload)}\n\n"
 
     def generate():
         proc = subprocess.Popen(
-            [sys.executable, "-u", script],
+            cmd,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             env=env, text=True, bufsize=1,
         )
@@ -1545,6 +1550,223 @@ def _append_search_exclusions(jql: str) -> str:
     if not base:
         return SEARCH_EXCLUDE_JQL
     return f"({base}) AND {SEARCH_EXCLUDE_JQL}"
+
+
+def _normalize_user_value(value: str) -> str:
+    return str(value or "").strip().lower()
+
+
+def _user_matches_target(value: str, targets: set[str]) -> bool:
+    normalized = _normalize_user_value(value)
+    if not normalized:
+        return False
+    if normalized in targets:
+        return True
+    if "@" in normalized and normalized.split("@", 1)[0] in targets:
+        return True
+    return False
+
+
+def _tokens_from_user(user: dict) -> set[str]:
+    out: set[str] = set()
+    for field in ("accountId", "name", "key", "displayName", "emailAddress"):
+        value = user.get(field)
+        normalized = _normalize_user_value(value)
+        if normalized:
+            out.add(normalized)
+            if field == "emailAddress" and "@" in normalized:
+                out.add(normalized.split("@", 1)[0])
+    return out
+
+
+def _resolve_assignee_aliases(assignees: list[str]) -> set[str]:
+    targets = {_normalize_user_value(a) for a in assignees if _normalize_user_value(a)}
+    if not targets:
+        return set()
+
+    resolved = set(targets)
+    for assignee in sorted(targets):
+        lookup_paths = [
+            f"/rest/api/3/user/search?query={quote(assignee)}&maxResults=25",
+            f"/rest/api/2/user/search?username={quote(assignee)}&maxResults=25",
+            f"/rest/api/3/user?accountId={quote(assignee)}",
+            f"/rest/api/2/user?accountId={quote(assignee)}",
+            f"/rest/api/2/user?username={quote(assignee)}",
+        ]
+        for path in lookup_paths:
+            data, _ = _jira_get(path)
+            if "error" in data:
+                continue
+            if isinstance(data, list):
+                for user in data:
+                    if isinstance(user, dict):
+                        resolved.update(_tokens_from_user(user))
+            elif isinstance(data, dict):
+                resolved.update(_tokens_from_user(data))
+
+    return resolved
+
+
+def _parse_jira_datetime(value: str) -> datetime:
+    raw = str(value or "").strip()
+    if not raw:
+        raise ValueError("Empty Jira datetime value")
+    if re.search(r"[+-]\d{4}$", raw):
+        raw = f"{raw[:-5]}{raw[-5:-2]}:{raw[-2:]}"
+    if raw.endswith("Z"):
+        raw = f"{raw[:-1]}+00:00"
+    return datetime.fromisoformat(raw)
+
+
+def _fetch_issues_by_jql_paginated(jql: str, limit: int) -> list[dict]:
+    issues: list[dict] = []
+    start_at = 0
+    page_size = max(1, min(100, int(limit)))
+
+    while len(issues) < limit:
+        payload = {
+            "jql": jql,
+            "startAt": start_at,
+            "maxResults": min(page_size, limit - len(issues)),
+            "fields": ["resolutiondate", "assignee", "created"],
+        }
+        data, code = _jira_post("/rest/api/2/search", payload)
+        if "error" in data:
+            raise RuntimeError(data.get("detail") or data.get("error") or f"Jira search failed with HTTP {code}")
+
+        batch = data.get("issues", []) or []
+        if not batch:
+            break
+
+        issues.extend(batch)
+        start_at += len(batch)
+        total = int(data.get("total", 0) or 0)
+        if start_at >= total:
+            break
+
+    return issues
+
+
+def _fetch_issue_changelog(issue_key: str) -> list[dict]:
+    histories: list[dict] = []
+    start_at = 0
+    max_results = 100
+    endpoint = None
+    endpoint_patterns = {
+        "v3": f"/rest/api/3/issue/{issue_key}/changelog?startAt={{start_at}}&maxResults={max_results}",
+        "v2": f"/rest/api/2/issue/{issue_key}/changelog?startAt={{start_at}}&maxResults={max_results}",
+        "latest": f"/rest/api/latest/issue/{issue_key}/changelog?startAt={{start_at}}&maxResults={max_results}",
+    }
+
+    while True:
+        if endpoint is None:
+            data = None
+            last_error = None
+            for candidate in ("v3", "v2", "latest"):
+                probe, _ = _jira_get(endpoint_patterns[candidate].format(start_at=start_at))
+                if "error" in probe:
+                    last_error = probe
+                    continue
+                endpoint = candidate
+                data = probe
+                break
+
+            if data is None:
+                # Jira Server/Data Center fallback: changelog via expand.
+                issue_with_changelog_paths = [
+                    f"/rest/api/2/issue/{issue_key}?expand=changelog",
+                    f"/rest/api/latest/issue/{issue_key}?expand=changelog",
+                ]
+                for path in issue_with_changelog_paths:
+                    issue_data, _ = _jira_get(path)
+                    if "error" in issue_data:
+                        last_error = issue_data
+                        continue
+                    changelog = issue_data.get("changelog") or {}
+                    return (changelog.get("histories") or [])
+
+                raise RuntimeError((last_error or {}).get("detail") or (last_error or {}).get("error") or f"Failed changelog fetch for {issue_key}")
+        else:
+            data, _ = _jira_get(endpoint_patterns[endpoint].format(start_at=start_at))
+            if "error" in data:
+                raise RuntimeError(data.get("detail") or data.get("error") or f"Failed changelog fetch for {issue_key}")
+
+        values = data.get("values")
+        if values is None:
+            values = data.get("histories", [])
+        values = values or []
+        if not values:
+            break
+
+        histories.extend(values)
+        start_at += len(values)
+        total = int(data.get("total", 0) or 0)
+        if total and start_at >= total:
+            break
+        if not total:
+            break
+
+    return histories
+
+
+def _find_first_assignment_date(histories: list[dict], target_assignees: set[str]) -> datetime | None:
+    matches: list[datetime] = []
+    for history in histories:
+        created = history.get("created")
+        if not created:
+            continue
+        when = _parse_jira_datetime(created)
+        for item in history.get("items", []) or []:
+            if _normalize_user_value(item.get("field")) != "assignee":
+                continue
+            if _user_matches_target(item.get("to"), target_assignees) or _user_matches_target(item.get("toString"), target_assignees):
+                matches.append(when)
+
+    if not matches:
+        return None
+    matches.sort()
+    return matches[0]
+
+
+def _calculate_resolution_duration(issue: dict, target_assignees: set[str]) -> tuple[dict | None, dict | None]:
+    issue_key = str(issue.get("key") or "").strip()
+    if not issue_key:
+        return None, None
+
+    resolution_date_raw = ((issue.get("fields") or {}).get("resolutiondate"))
+    if not resolution_date_raw:
+        return None, {"issueKey": issue_key, "reason": "Missing resolutiondate"}
+
+    resolved_at = _parse_jira_datetime(resolution_date_raw)
+    changelog = _fetch_issue_changelog(issue_key)
+    assigned_at = _find_first_assignment_date(changelog, target_assignees)
+
+    if not assigned_at:
+        fields = issue.get("fields") or {}
+        assignee = fields.get("assignee") or {}
+        created_raw = fields.get("created")
+        if created_raw and (
+            _user_matches_target(assignee.get("name"), target_assignees)
+            or _user_matches_target(assignee.get("key"), target_assignees)
+            or _user_matches_target(assignee.get("accountId"), target_assignees)
+            or _user_matches_target(assignee.get("displayName"), target_assignees)
+            or _user_matches_target(assignee.get("emailAddress"), target_assignees)
+        ):
+            assigned_at = _parse_jira_datetime(created_raw)
+        else:
+            return None, {"issueKey": issue_key, "reason": "No assignment to target assignees in changelog"}
+
+    duration_hours = (resolved_at - assigned_at).total_seconds() / 3600.0
+    if duration_hours < 0:
+        return None, {"issueKey": issue_key, "reason": "Resolution date is earlier than assignment date"}
+
+    return {
+        "issueKey": issue_key,
+        "assignedAt": assigned_at.isoformat(),
+        "resolvedAt": resolved_at.isoformat(),
+        "hoursToResolve": round(duration_hours, 2),
+        "daysToResolve": round(duration_hours / 24.0, 2),
+    }, None
 
 
 @app.route("/jira/get-issue", methods=["POST"])
@@ -1832,6 +2054,70 @@ def jira_analyze_bulk_dry_run():
     })
 
 
+@app.route("/jira/resolution-time-after-assignment", methods=["POST"])
+def jira_resolution_time_after_assignment():
+    body = request.json or {}
+    jql = str(body.get("jql") or "").strip()
+    assignees_raw = body.get("assignees") or []
+    max_issues = int(body.get("maxIssues", 500))
+    include_per_issue = bool(body.get("includePerIssue", True))
+
+    if not jql:
+        return jsonify({"error": "jql is required"}), 400
+    if not isinstance(assignees_raw, list) or not assignees_raw:
+        return jsonify({"error": "assignees must be a non-empty list"}), 400
+
+    target_assignees = _resolve_assignee_aliases(assignees_raw)
+    if not target_assignees:
+        return jsonify({"error": "No valid assignees provided"}), 400
+
+    max_issues = max(1, min(max_issues, 1000))
+
+    try:
+        issues = _fetch_issues_by_jql_paginated(jql, max_issues)
+        issue_durations = []
+        skipped = []
+        worker_count = max(1, min(8, len(issues)))
+        with ThreadPoolExecutor(max_workers=worker_count) as pool:
+            futures = {}
+            for issue in issues:
+                issue_key = str((issue or {}).get("key") or "").strip() or "-"
+                future = pool.submit(_calculate_resolution_duration, issue, target_assignees)
+                futures[future] = issue_key
+
+            for future in as_completed(futures):
+                issue_key = futures[future]
+                try:
+                    duration_item, skipped_item = future.result()
+                    if duration_item:
+                        issue_durations.append(duration_item)
+                    elif skipped_item:
+                        skipped.append(skipped_item)
+                except Exception as issue_error:
+                    skipped.append({"issueKey": issue_key, "reason": str(issue_error)})
+
+        analyzed_count = len(issue_durations)
+        avg_hours = round(sum(item["hoursToResolve"] for item in issue_durations) / analyzed_count, 2) if analyzed_count else None
+        avg_days = round(avg_hours / 24.0, 2) if avg_hours is not None else None
+
+        response = {
+            "jql": jql,
+            "assignees": sorted(target_assignees),
+            "matchedIssueCount": len(issues),
+            "analyzedIssueCount": analyzed_count,
+            "skippedIssueCount": len(skipped),
+            "averageHoursToResolveAfterAssignment": avg_hours,
+            "averageDaysToResolveAfterAssignment": avg_days,
+            "skippedIssues": skipped,
+        }
+        if include_per_issue:
+            response["issueDurations"] = issue_durations
+
+        return jsonify(response)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # ─── AI Chat (JiraAzureCopilot) ───────────────────────────────────────────────────
 
 @app.route("/chat", methods=["POST"])
@@ -1870,4 +2156,3 @@ def chat():
 if __name__ == "__main__":
     print("🎫  JiraAzureCopilot UI  →  http://localhost:5000")
     app.run(debug=True, port=5000, threaded=True)
-

@@ -11,6 +11,7 @@ Flow:
 
 Set DRY_RUN=true in .env to preview without modifying Jira.
 """
+import argparse
 import os
 import re
 from collections import Counter
@@ -36,8 +37,25 @@ APAC_KW = [k.strip().lower() for k in os.getenv("APAC_KEYWORDS", "").split(",") 
 IMN_RC_KW = [k.strip().lower() for k in os.getenv("IMN_ROOM_CATEGORY_KEYWORDS", "").split(",") if k.strip()]
 IMN_MM_KW = [k.strip().lower() for k in os.getenv("IMN_MISMATCH_KEYWORDS", "").split(",") if k.strip()]
 
-DRY_RUN = os.getenv("DRY_RUN", "true").lower() == "true"
 TEST_ISSUE_KEY = os.getenv("TEST_ISSUE_KEY", "").strip()
+
+
+def _parse_bool(value, default=True):
+    if value is None:
+        return default
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
+def _resolve_dry_run(cli_value=None):
+    """Resolve effective mode from CLI first, then env, defaulting to dry run."""
+    if cli_value is not None:
+        return _parse_bool(cli_value, default=True), "cli"
+    return _parse_bool(os.getenv("DRY_RUN"), default=True), "env"
 
 
 def connect_jira():
@@ -224,7 +242,7 @@ def _format_connects(matched):
     return ", ".join(seen)
 
 
-def apply_decision(jira, issue, decision):
+def apply_decision(jira, issue, decision, dry_run=True):
     team = decision.get("team", "KEEP")
     matched = decision.get("matched", [])
 
@@ -261,7 +279,7 @@ def apply_decision(jira, issue, decision):
     print("  -> {} reassign to {} ({}) [{}] matched={}".format(
         issue.key, new_assignee, team, decision.get("source"), matched
     ))
-    if DRY_RUN:
+    if dry_run:
         print("     (DRY_RUN=true; not modifying Jira)")
         print("     comment preview:", comment)
         return True
@@ -287,9 +305,20 @@ def apply_decision(jira, issue, decision):
 
 
 def main():
+    parser = argparse.ArgumentParser(add_help=False)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--dry-run", dest="dry_run", action="store_true")
+    mode.add_argument("--live", dest="dry_run", action="store_false")
+    parser.set_defaults(dry_run=None)
+    args, _ = parser.parse_known_args()
+
+    dry_run, dry_run_source = _resolve_dry_run(args.dry_run)
+
     jira = connect_jira()
     me = jira.myself()
     print("Authenticated as", me.get("name"))
+    print("Mode             :", "DRY RUN (no Jira changes)" if dry_run else "LIVE")
+    print("Mode source      :", dry_run_source)
 
     issues = fetch_team_tickets(jira)
     print("Fetched {} open tickets for {}".format(len(issues), TEAM_USERS))
@@ -305,11 +334,11 @@ def main():
             issue.key, title[:80], team, decision.get("source")
         ))
         if team in ("APAC", "IMN"):
-            apply_decision(jira, issue, decision)
+            apply_decision(jira, issue, decision, dry_run=dry_run)
             routed.append((issue.key, team))
 
     print("\n========== REPORT ==========")
-    print("Mode             :", "DRY RUN (no Jira changes)" if DRY_RUN else "LIVE")
+    print("Mode             :", "DRY RUN (no Jira changes)" if dry_run else "LIVE")
     print("Total scanned    :", sum(stats.values()))
     print("Kept in IDD/CRS  :", stats["KEEP"])
     print("Shifted to APAC  :", stats["APAC"], "->", APAC_ASSIGNEE)

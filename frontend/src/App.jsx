@@ -390,6 +390,10 @@ function MCPToolsView({ jiraUrl = "" }) {
   const [abKeywords, setAbKeywords] = useState("");
   const [abExec, setAbExec] = useState(true);
   const [abComment, setAbComment] = useState(false);
+  const [rtJql, setRtJql] = useState('project = SWPSUP AND status IN (Done, Resolved) AND (status WAS "Third Lvl To Do" OR status WAS "Third Lvl In Progress" OR status WAS "Second Lvl To Do" OR status WAS "Second Lvl In Progress") AND assignee IN (rba50, ksh03, mga50, nsh50, ssi51) AND resolved >= -90d ORDER BY resolved DESC');
+  const [rtAssignees, setRtAssignees] = useState("rba50, ksh03, mga50, nsh50, ssi51");
+  const [rtMaxIssues, setRtMaxIssues] = useState(100);
+  const [rtIncludePerIssue, setRtIncludePerIssue] = useState(true);
   const [running, setRunning] = useState(false);
 
   const rowsFromIssueArray = (payload) => {
@@ -509,6 +513,50 @@ function MCPToolsView({ jiraUrl = "" }) {
     </div>
   );
 
+  const renderResolutionTimeTable = (payload) => {
+    const rows = Array.isArray(payload?.issueDurations) ? payload.issueDurations : [];
+    return (
+      <div className="mcp-result-wrap">
+        <div className="mcp-meta-row">
+          <span>Matched: {payload?.matchedIssueCount ?? 0}</span>
+          <span>Analyzed: {payload?.analyzedIssueCount ?? 0}</span>
+          <span>Skipped: {payload?.skippedIssueCount ?? 0}</span>
+          <span>Avg Hours: {payload?.averageHoursToResolveAfterAssignment ?? "-"}</span>
+          <span>Avg Days: {payload?.averageDaysToResolveAfterAssignment ?? "-"}</span>
+        </div>
+        {rows.length > 0 && (
+          <div className="table-wrap">
+            <table className="results-table mcp-results-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Ticket</th>
+                  <th>Assigned At</th>
+                  <th>Resolved At</th>
+                  <th>Hours</th>
+                  <th>Days</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row, idx) => (
+                  <tr key={row.issueKey}>
+                    <td className="mcp-col-idx">{idx + 1}</td>
+                    <td><TicketLink ticketKey={row.issueKey} jiraUrl={jiraUrl} /></td>
+                    <td>{row.assignedAt || "-"}</td>
+                    <td>{row.resolvedAt || "-"}</td>
+                    <td>{row.hoursToResolve ?? "-"}</td>
+                    <td>{row.daysToResolve ?? "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {renderRawResponse(payload, "Raw Resolve Time response")}
+      </div>
+    );
+  };
+
   const renderRawResponse = (payload, title = "Raw response") => (
     <section className="raw-response-section">
       <div className="raw-response-head">
@@ -617,6 +665,10 @@ function MCPToolsView({ jiraUrl = "" }) {
       );
     }
 
+    if (resultData && typeof resultData === "object" && Object.prototype.hasOwnProperty.call(resultData, "averageHoursToResolveAfterAssignment")) {
+      return renderResolutionTimeTable(resultData);
+    }
+
     if (resultData && typeof resultData === "object" && resultData.ticket && resultData.indicators && resultData.newRelic) {
       return renderAnalyzeSupportTable(resultData);
     }
@@ -653,6 +705,14 @@ function MCPToolsView({ jiraUrl = "" }) {
       if (tool === "assign")   data = await postJson("/jira/assign-issue", { issueKey, assignee });
       if (tool === "link")     data = await postJson("/jira/link-issues", { inwardIssue: inward, outwardIssue: outward, linkType });
       if (tool === "analyze") data = await postJson("/jira/analyze-support-ticket", { issueKey, executeApi: true, enableJiraComment: anComment });
+      if (tool === "resolve-time") {
+        data = await postJson("/jira/resolution-time-after-assignment", {
+          jql: rtJql,
+          assignees: rtAssignees.split(",").map((s) => s.trim()).filter(Boolean),
+          maxIssues: +rtMaxIssues,
+          includePerIssue: rtIncludePerIssue,
+        });
+      }
       if (tool === "analyze-bulk") {
         data = await postJson("/jira/analyze-bulk-dry-run", {
           project: "CRSUP",
@@ -689,6 +749,7 @@ function MCPToolsView({ jiraUrl = "" }) {
               <option value="assign">Assign Issue</option>
               <option value="link">Link Issues</option>
               <option value="analyze">Analyze Single Support Ticket</option>
+              <option value="resolve-time">Resolution Time After Assignment</option>
               <option value="analyze-bulk">Bulk Analyze (CRSUP Dry Run)</option>
             </select>
           </div>
@@ -780,6 +841,37 @@ function MCPToolsView({ jiraUrl = "" }) {
                 <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <input type="checkbox" checked={anComment} onChange={(e) => setAnComment(e.target.checked)} />
                   Post Comment
+                </label>
+              </div>
+            </>
+          )}
+
+          {tool === "resolve-time" && (
+            <>
+              <div className="field grow">
+                <label>JQL</label>
+                <input
+                  value={rtJql}
+                  onChange={(e) => setRtJql(e.target.value)}
+                  placeholder='project = SWPSUP AND status IN (Done, Resolved) AND resolved >= -90d ORDER BY resolved DESC'
+                />
+              </div>
+              <div className="field grow">
+                <label>Assignees (comma-separated)</label>
+                <input
+                  value={rtAssignees}
+                  onChange={(e) => setRtAssignees(e.target.value)}
+                  placeholder="rba50, ksh03, mga50, nsh50, ssi51"
+                />
+              </div>
+              <div className="field" style={{ maxWidth: 120 }}>
+                <label>Max Issues</label>
+                <input type="number" value={rtMaxIssues} onChange={(e) => setRtMaxIssues(e.target.value)} />
+              </div>
+              <div className="field" style={{ justifyContent: "flex-end" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <input type="checkbox" checked={rtIncludePerIssue} onChange={(e) => setRtIncludePerIssue(e.target.checked)} />
+                  Include per-issue durations
                 </label>
               </div>
             </>
@@ -1269,4 +1361,3 @@ export default function App() {
     </div>
   );
 }
-

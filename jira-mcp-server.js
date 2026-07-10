@@ -13,6 +13,120 @@ const jiraClient = axios.create({
     },
 });
 
+function normalizeUserValue(value) {
+    return String(value || "").trim().toLowerCase();
+}
+
+function parseJiraDate(dateText) {
+    const date = new Date(dateText);
+    if (Number.isNaN(date.getTime())) {
+        throw new Error(`Invalid Jira date value: ${dateText}`);
+    }
+    return date;
+}
+
+async function fetchIssuesByJqlPaginated(jql, limit) {
+    const issues = [];
+    const pageSize = Math.min(100, Math.max(1, limit));
+    let startAt = 0;
+
+    while (issues.length < limit) {
+        const response = await jiraClient.get(`/rest/api/2/search`, {
+            params: {
+                jql,
+                startAt,
+                maxResults: Math.min(pageSize, limit - issues.length),
+                fields: "resolutiondate,created",
+            },
+        });
+
+        const batch = response.data?.issues || [];
+        issues.push(...batch);
+
+        if (!batch.length) break;
+
+        startAt += batch.length;
+        const total = Number(response.data?.total || 0);
+        if (startAt >= total) break;
+    }
+
+    return issues;
+}
+
+async function fetchIssueChangelog(issueKey) {
+    const histories = [];
+    let startAt = 0;
+    const maxResults = 100;
+    const endpoints = [
+        `/rest/api/3/issue/${issueKey}/changelog`,
+        `/rest/api/2/issue/${issueKey}/changelog`,
+    ];
+    let activeEndpoint = null;
+
+    while (true) {
+        let response = null;
+        let endpointUsed = activeEndpoint;
+
+        if (activeEndpoint) {
+            response = await jiraClient.get(activeEndpoint, { params: { startAt, maxResults } });
+        } else {
+            let lastError = null;
+            for (const endpoint of endpoints) {
+                try {
+                    response = await jiraClient.get(endpoint, { params: { startAt, maxResults } });
+                    endpointUsed = endpoint;
+                    break;
+                } catch (error) {
+                    lastError = error;
+                }
+            }
+            if (!response) {
+                throw lastError || new Error(`Unable to fetch changelog for ${issueKey}`);
+            }
+        }
+
+        activeEndpoint = endpointUsed;
+        const data = response.data || {};
+        const values = data.values || data.histories || [];
+
+        histories.push(...values);
+        if (!values.length) break;
+
+        startAt += values.length;
+        const total = Number(data.total || 0);
+        if (total > 0 && startAt >= total) break;
+        if (!Number.isFinite(total) || total === 0) break;
+    }
+
+    return histories;
+}
+
+function findFirstAssignmentDate(histories, targetAssignees) {
+    const matches = [];
+
+    for (const history of histories || []) {
+        const changeDateRaw = history?.created;
+        if (!changeDateRaw) continue;
+
+        const changeDate = parseJiraDate(changeDateRaw);
+        const items = history?.items || [];
+
+        for (const item of items) {
+            if (normalizeUserValue(item?.field) !== "assignee") continue;
+
+            const toValue = normalizeUserValue(item?.to);
+            const toStringValue = normalizeUserValue(item?.toString);
+            if (targetAssignees.has(toValue) || targetAssignees.has(toStringValue)) {
+                matches.push(changeDate);
+            }
+        }
+    }
+
+    if (!matches.length) return null;
+    matches.sort((a, b) => a.getTime() - b.getTime());
+    return matches[0];
+}
+
 // ---- MCP Server setup ----
 const server = new McpServer({ name: "jira-mcp", version: "1.0.0" });
 
@@ -166,6 +280,100 @@ server.tool(
         } catch (error) {
             return {
                 content: [{ type: "text", text: `Failed to add comment: ${error.message}` }],
+                isError: true,
+            };
+        }
+    }
+);
+
+// ---- resolution-time-from-assignment tool ----
+server.tool(
+    "calculate_resolution_time_after_assignment",
+    "Calculate per-issue and average resolution time after assignment to selected assignees",
+    {
+        jql: z.string().describe("JQL used to fetch issues (should include resolved issues)."),
+        assignees: z.array(z.string()).nonempty().describe("Assignee identifiers (username/accountId/display value as seen in changelog)."),
+        maxIssues: z.number().int().positive().max(1000).optional().describe("Maximum issues to analyze (default: 500)."),
+        includePerIssue: z.boolean().optional().describe("Include per-issue durations in output (default: true)."),
+    },
+    async ({ jql, assignees, maxIssues = 500, includePerIssue = true }) => {
+        try {
+            const targetAssignees = new Set(assignees.map((value) => normalizeUserValue(value)).filter(Boolean));
+            if (!targetAssignees.size) {
+                return {
+                    content: [{ type: "text", text: "No valid assignees provided." }],
+                    isError: true,
+                };
+            }
+
+            const issues = await fetchIssuesByJqlPaginated(jql, maxIssues);
+            const issueDurations = [];
+            const skipped = [];
+
+            for (const issue of issues) {
+                const issueKey = issue?.key;
+                const resolutionDateRaw = issue?.fields?.resolutiondate;
+                if (!issueKey) continue;
+
+                try {
+                    if (!resolutionDateRaw) {
+                        skipped.push({ issueKey, reason: "Missing resolutiondate" });
+                        continue;
+                    }
+
+                    const resolvedAt = parseJiraDate(resolutionDateRaw);
+                    const changelog = await fetchIssueChangelog(issueKey);
+                    const assignedAt = findFirstAssignmentDate(changelog, targetAssignees);
+
+                    if (!assignedAt) {
+                        skipped.push({ issueKey, reason: "No assignment to target assignees in changelog" });
+                        continue;
+                    }
+
+                    const durationMs = resolvedAt.getTime() - assignedAt.getTime();
+                    if (durationMs < 0) {
+                        skipped.push({ issueKey, reason: "Resolution date is earlier than assignment date" });
+                        continue;
+                    }
+
+                    issueDurations.push({
+                        issueKey,
+                        assignedAt: assignedAt.toISOString(),
+                        resolvedAt: resolvedAt.toISOString(),
+                        hoursToResolve: Number((durationMs / (1000 * 60 * 60)).toFixed(2)),
+                        daysToResolve: Number((durationMs / (1000 * 60 * 60 * 24)).toFixed(2)),
+                    });
+                } catch (issueError) {
+                    skipped.push({ issueKey, reason: issueError.message });
+                }
+            }
+
+            const totalHours = issueDurations.reduce((sum, item) => sum + item.hoursToResolve, 0);
+            const analyzedCount = issueDurations.length;
+            const averageHours = analyzedCount ? Number((totalHours / analyzedCount).toFixed(2)) : null;
+            const averageDays = averageHours === null ? null : Number((averageHours / 24).toFixed(2));
+
+            const result = {
+                jql,
+                assignees: Array.from(targetAssignees),
+                matchedIssueCount: issues.length,
+                analyzedIssueCount: analyzedCount,
+                skippedIssueCount: skipped.length,
+                averageHoursToResolveAfterAssignment: averageHours,
+                averageDaysToResolveAfterAssignment: averageDays,
+                skippedIssues: skipped,
+            };
+
+            if (includePerIssue) {
+                result.issueDurations = issueDurations;
+            }
+
+            return {
+                content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+            };
+        } catch (error) {
+            return {
+                content: [{ type: "text", text: `Failed to calculate resolution timing: ${error.message}` }],
                 isError: true,
             };
         }

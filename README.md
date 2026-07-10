@@ -38,6 +38,60 @@ A comprehensive Jira automation system with AI-powered ticket routing and a Mode
 ├── cline_mcp_config.json               # MCP configuration for Cline
 └── markupFiles/                        # Consolidated project docs
 ```
+┌──────────────────────────────┐
+│          End Users           │
+│  Support / Ops / Analysts    │
+└──────────────┬───────────────┘
+│
+▼
+┌─────────────────────────────────────────────┐
+│              Presentation Layer             │
+│                                             │
+│  1. React UI (`frontend/src/App.jsx`)       │
+│  2. Flask UI (`ticket_modules/web/ui_app.py`)│
+└──────────────┬──────────────────────────────┘
+│ HTTP / JSON
+▼
+┌─────────────────────────────────────────────┐
+│           Backend / App Layer               │
+│                                             │
+│  Flask API + UI Routes                      │
+│  (`ticket_modules/web/ui_app.py`)           │
+└──────────────┬──────────────────────────────┘
+│
+┌─────────┼─────────┬──────────────────────┐
+│         │         │                      │
+▼         ▼         ▼                      ▼
+┌──────────┐ ┌───────────────┐ ┌────────────────────┐ ┌────────────────────┐
+│ Chat     │ │ Orchestrator  │ │ Support Analyzer   │ │ Direct Jira Tools   │
+│ Agent    │ │ Engine        │ │                    │ │ Search/Get/Create   │
+│ (`chat_  │ │ (`orchestrator│ │ (`support_ticket_  │ │ Comment/Assign/Link │
+│ agent.py`)│ │ .py`)        │ │ analyzer.py`)      │ │                    │
+└────┬─────┘ └──────┬────────┘ └──────────┬─────────┘ └────────────────────┘
+│              │                      │
+│              │                      │
+▼              ▼                      ▼
+┌──────────────┐ ┌──────────────┐ ┌────────────────────────────┐
+│ GitHub Models│ │ Jira Python  │ │ Investigation Pipeline      │
+│ / LLM        │ │ Client       │ │ Jira → New Relic → EC2      │
+└──────────────┘ └──────────────┘ └────────────────────────────┘
+│
+▼
+┌─────────────────────────────────────┐
+│           MCP Layer                 │
+│                                     │
+│  `jira-mcp-server.js`               │
+│  `jira-ticket-context-mcp-server.js`│
+│  `newrelic-log-check-mcp-server.js` │
+│  `singleavail-ec2-mcp-server.js`    │
+└──────────────┬──────────────────────┘
+│
+▼
+┌──────────────────────────────────────────────┐
+│              External Systems                │
+│ Jira | New Relic | EC2 SingleAvail | AI API  │
+└──────────────────────────────────────────────┘
+
 
 ## Prerequisites
 
@@ -171,6 +225,7 @@ The MCP server is configured in `cline_mcp_config.json`. Cline will auto-detect 
 - **search_jira_issues** - Search using JQL
 - **create_jira_issue** - Create new issues
 - **add_comment** - Add comments to issues
+- **calculate_resolution_time_after_assignment** - Compute per-issue + average resolve time after assignment to selected users
 
 **Example Claude prompt:**
 ```

@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ticketorchestrator.local/schemas/metrics_schema.json",
+  "title": "Ticket Orchestrator NAGAS Metrics Schema",
+  "description": "Structured schema for evaluating agent runs across Jira, New Relic, and EC2 workflows.",
+  "type": "object",
+  "required": ["schema_version", "run_id", "timestamp_utc", "workflow", "metrics", "tickets"],
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0.0" },
+    "run_id": { "type": "string", "minLength": 1 },
+    "timestamp_utc": { "type": "string", "format": "date-time" },
+    "workflow": {
+      "type": "string",
+      "enum": ["single-ticket-analysis", "bulk-dry-run", "search-only", "comment-only", "orchestrator"]
+    },
+    "source": {
+      "type": "object",
+      "properties": {
+        "model": { "type": "string" },
+        "agent": { "type": "string" },
+        "tools": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": true
+    },
+    "metrics": {
+      "type": "object",
+      "required": ["tool_selection_accuracy", "tool_grounding_rate", "unsupported_claim_rate", "evidence_citation_coverage", "abstention_correctness", "parameter_fidelity", "deterministic_replay_consistency", "policy_violation_rate"],
+      "properties": {
+        "tool_selection_accuracy": { "type": "number", "minimum": 0, "maximum": 1 },
+        "tool_grounding_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "unsupported_claim_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "evidence_citation_coverage": { "type": "number", "minimum": 0, "maximum": 1 },
+        "abstention_correctness": { "type": "number", "minimum": 0, "maximum": 1 },
+        "parameter_fidelity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "deterministic_replay_consistency": { "type": "number", "minimum": 0, "maximum": 1 },
+        "policy_violation_rate": { "type": "number", "minimum": 0, "maximum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "tickets": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["issue_key", "intent", "expected_path", "observed_path", "terminal_state", "evidence"],
+        "properties": {
+          "issue_key": { "type": "string", "minLength": 1 },
+          "intent": { "type": "string", "minLength": 1 },
+          "expected_path": { "type": "string", "minLength": 1 },
+          "observed_path": { "type": "string", "minLength": 1 },
+          "terminal_state": { "type": "string", "enum": ["DONE", "FAILED", "NEEDS_INPUT", "SKIPPED"] },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["source", "field", "value"],
+              "properties": {
+                "source": { "type": "string", "minLength": 1 },
+                "field": { "type": "string", "minLength": 1 },
+                "value": { "type": "string" }
+              },
+              "additionalProperties": false
+            }
+          },
+          "notes": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "notes": { "type": "string" }
+  },
+  "additionalProperties": false
+}
+
